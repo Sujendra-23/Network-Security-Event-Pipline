@@ -1,0 +1,28 @@
+.rocketride/
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# Spark / Delta local metadata
+data/raw/
+data/processed/
+data/delta/
+data/delta_demo/
+spark-warehouse/
+metastore_db/
+derby.log
+*.crc
+
+# Kaggle credentials must never be committed
+kaggle.json
+access_token
+
+# Claude Code harness runtime state, not project content
+.claude/scheduled_tasks.lock
+
+# Airflow local state
+logs/
+airflow.db
+airflow.cfg
