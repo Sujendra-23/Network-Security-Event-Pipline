@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import shutil
 
 from pyspark.sql import DataFrame, functions as F
 
@@ -155,7 +156,7 @@ def build_src_ip_window_counts(df: DataFrame, cols: dict[str, str]) -> DataFrame
     windowed = (
         df.filter(F.col("event_time").isNotNull())
         .withColumn("_bytes", bytes_expr)
-        .groupBy(F.col(src_ip).alias("source_ip"), F.window("event_time", "5 minutes"))
+        .groupBy(F.col(src_ip).alias("source_ip"), "label", F.window("event_time", "5 minutes"))
         .agg(
             F.count("*").alias("flow_count"),
             F.sum("_bytes").alias("total_bytes"),
@@ -165,6 +166,7 @@ def build_src_ip_window_counts(df: DataFrame, cols: dict[str, str]) -> DataFrame
         )
         .select(
             "source_ip",
+            "label",
             F.col("window.start").alias("window_start"),
             F.col("window.end").alias("window_end"),
             "flow_count",
@@ -255,6 +257,8 @@ def main() -> None:
         write_delta(window_counts, f"{args.delta_dir}/src_ip_window_counts", ["window_date"])
         print("[transform] wrote src_ip_window_counts")
     else:
+        if os.path.exists(f"{args.delta_dir}/src_ip_window_counts"):
+            shutil.rmtree(f"{args.delta_dir}/src_ip_window_counts")
         print("[transform] skipped src_ip_window_counts: no source IP column in this data")
 
     anomaly_counts = build_anomaly_threshold_counts(cleaned, cols)
@@ -264,6 +268,8 @@ def main() -> None:
         )
         print("[transform] wrote anomaly_threshold_counts")
     else:
+        if os.path.exists(f"{args.delta_dir}/anomaly_threshold_counts"):
+            shutil.rmtree(f"{args.delta_dir}/anomaly_threshold_counts")
         print(
             "[transform] skipped anomaly_threshold_counts: no Flow Packets/s column in this data"
         )

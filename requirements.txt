@@ -2,3 +2,6 @@ pyspark==3.5.3
 delta-spark==3.2.1
 pandas==3.0.6
 kaggle==2.2.4
+google-cloud-bigquery>=3.25,<4
+deltalake>=1.0,<2
+pyarrow>=19,<24

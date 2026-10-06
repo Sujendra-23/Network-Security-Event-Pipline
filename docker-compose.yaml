@@ -22,6 +22,10 @@ services:
     environment:
       AIRFLOW__CORE__LOAD_EXAMPLES: "false"
       PROJECT_ROOT: /opt/airflow/project
+      BIGQUERY_PROJECT: ${BIGQUERY_PROJECT:-}
+      BIGQUERY_DATASET: ${BIGQUERY_DATASET:-network_security}
+      BIGQUERY_LOCATION: ${BIGQUERY_LOCATION:-US}
+      GOOGLE_APPLICATION_CREDENTIALS: /opt/airflow/gcp/application_default_credentials.json
     volumes:
       - airflow_home:/opt/airflow
       - ./dags:/opt/airflow/dags:ro
@@ -29,6 +33,7 @@ services:
       - ./validation:/opt/airflow/project/validation:ro
       - ./scripts:/opt/airflow/project/scripts:ro
       - ./data:/opt/airflow/project/data
+      - ${GOOGLE_ADC_DIR:-~/.config/gcloud}:/opt/airflow/gcp:ro
       - ~/.kaggle:/home/airflow/.kaggle:ro
 
 volumes:

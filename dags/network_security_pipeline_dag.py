@@ -1,6 +1,6 @@
 """Network Security Event Pipeline DAG.
 
-ingest_raw -> spark_transform -> validate_output -> write_delta_table
+ingest_raw -> spark_transform -> validate_output -> load_bigquery -> write_delta_table
 
 Runs entirely inside this DAG's own Docker container (see Dockerfile.airflow
 and docker-compose.yaml at the project root) against Spark local[*] mode --
@@ -17,6 +17,8 @@ need instead.
   pandas-based cross-check against Spark's output. Fails the task (and the
   DAG) if the check doesn't pass -- this is the gate that decides whether
   the run is trustworthy enough to publish.
+- load_bigquery: uploads validated Delta snapshots to daily ingestion-time
+  partitioned BigQuery tables clustered by label.
 - write_delta_table: runs dags/publish_manifest.py, which only executes
   after validation passes, and records each Delta table's version + row
   count to data/delta/_manifest.json as the "this run is published" marker.
@@ -42,11 +44,12 @@ default_args = {
 
 with DAG(
     dag_id="network_security_event_pipeline",
-    description="CIC-IDS2017 ingest -> Spark transform -> validate -> publish to Delta Lake",
+    description="CIC-IDS2017 ingest -> Spark transform -> validate -> load BigQuery -> publish Delta manifest",
     default_args=default_args,
     schedule=None,  # manually triggered: this processes a fixed historical dataset, not a stream
     start_date=datetime(2024, 1, 1),
     catchup=False,
+    max_active_runs=1,  # shared local Delta paths must not overlap between runs
     tags=["spark", "delta-lake", "network-security"],
 ) as dag:
 
@@ -79,6 +82,14 @@ with DAG(
         ),
     )
 
+    load_bigquery = BashOperator(
+        task_id="load_bigquery",
+        bash_command=(
+            f"cd {PROJECT_ROOT} && python3 jobs/load_bigquery.py "
+            f"--delta-dir {DELTA_DIR}"
+        ),
+    )
+
     def _write_delta_table() -> None:
         import sys
 
@@ -93,4 +104,4 @@ with DAG(
         python_callable=_write_delta_table,
     )
 
-    ingest_raw >> spark_transform >> validate_output >> write_delta_table
+    ingest_raw >> spark_transform >> validate_output >> load_bigquery >> write_delta_table

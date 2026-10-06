@@ -24,7 +24,7 @@ Kaggle (CIC-IDS2017 mirror)
 
   * only written if the raw data has a source-IP column (see "Dataset" below)
 
-Orchestrated by Airflow: ingest_raw -> spark_transform -> validate_output -> write_delta_table
+Orchestrated by Airflow: ingest_raw -> spark_transform -> validate_output -> load_bigquery -> write_delta_table
 ```
 
 ## Dataset
@@ -147,7 +147,7 @@ Java 17 + PySpark + Delta, via `Dockerfile.airflow`) runs the DAG in
 `dags/network_security_pipeline_dag.py`:
 
 ```
-ingest_raw -> spark_transform -> validate_output -> write_delta_table
+ingest_raw -> spark_transform -> validate_output -> load_bigquery -> write_delta_table
 ```
 
 - **ingest_raw**: `scripts/download_dataset.sh` (idempotent).
@@ -155,6 +155,8 @@ ingest_raw -> spark_transform -> validate_output -> write_delta_table
 - **validate_output**: `python3 validation/validate_output.py` -- fails
   the task (and halts the DAG) if the cross-check doesn't pass. This is
   the gate that decides whether a run is trustworthy enough to publish.
+- **load_bigquery**: `python3 jobs/load_bigquery.py` -- batch-loads the validated
+  fact table and available aggregates to BigQuery; fails on upload or row-count errors.
 - **write_delta_table**: `dags/publish_manifest.py`, which only runs after
   validation passes, and records each Delta table's version + row count to
   `data/delta/_manifest.json` -- the "this run is published" marker. (The
@@ -309,3 +311,78 @@ the fixture.
   behavior (shuffle over the network, executor failure/recovery, data
   skew across real partitions) the way a real multi-GB/TB production
   workload on an actual cluster would.
+
+
+## BigQuery sandbox destination
+
+The DAG now requires BigQuery configuration and follows:
+`ingest_raw -> spark_transform -> validate_output -> load_bigquery -> write_delta_table`.
+The earlier end-to-end Airflow results above predate this addition. The new loader
+has local fixture tests with a mocked BigQuery client; a live cloud load still
+requires your project and credentials.
+
+1. Create a Google Cloud project and open BigQuery to activate the
+   [sandbox](https://cloud.google.com/bigquery/docs/sandbox). No billing account
+   or credit card is required. Enable the BigQuery API if prompted.
+2. Install the Google Cloud CLI and authenticate for client libraries:
+
+   ```bash
+   gcloud auth application-default login
+   ```
+
+3. Add these settings to the existing gitignored `.env` (preserve other settings):
+
+   ```dotenv
+   BIGQUERY_PROJECT=your-project-id
+   BIGQUERY_DATASET=network_security
+   BIGQUERY_LOCATION=US
+   # Optional: absolute directory containing application_default_credentials.json
+   # GOOGLE_ADC_DIR=/Users/you/.config/gcloud
+   ```
+
+   The Docker setup mounts the ADC directory read-only. Never commit credentials.
+   The authenticated principal needs BigQuery Job User on the project and BigQuery
+   Data Editor on the destination dataset; automatic dataset creation additionally
+   requires `bigquery.datasets.create` on the project. You may pre-create the dataset
+   in the configured location instead. Use a dedicated dataset: the loader replaces
+   its four named tables and deletes optional destinations when their source is absent.
+4. Run `docker compose up --build`, then trigger `network_security_event_pipeline`
+   in Airflow at http://localhost:8081. Rerun the transform first if using old Delta
+   outputs: `src_ip_window_counts` now groups by source IP, label, and five-minute
+   window so it can also be clustered by label. Sum across labels for IP totals.
+
+All destinations (`network_events`, `label_counts`, `src_ip_window_counts`, and
+`anomaly_threshold_counts`, where available) use **daily ingestion-time partitions**
+(`_PARTITIONDATE`) and **clustering by `label`**. Original `event_date` / `window_date`
+columns retain the historical capture date. This is intentional: the sandbox expires
+partitions after 60 days, so event-date partitions from 2017 would expire immediately.
+See [partition expiration](https://cloud.google.com/bigquery/docs/managing-partitioned-tables#partition-expiration).
+The sandbox currently includes 10 GB active storage and 1 TB query processing per
+month; tables also expire after 60 days. This loader uses batch uploads, not streaming
+or DML, and does not require a Cloud Storage bucket.
+
+The loader reads Delta transaction-log snapshots with delta-rs, preserving partition
+columns and excluding obsolete Parquet files. It streams Arrow batches to temporary
+local Parquet files, uploads one file per table, waits for completion, and compares
+BigQuery's loaded row count with the exported count. Temporary disk space must fit
+the largest exported table. Each table is atomically replaced with `WRITE_TRUNCATE`;
+a rerun does not append duplicates. Publication across all four tables is **not**
+atomic: if a later table fails, earlier tables may already be updated. Rerun the task
+to finish. Airflow allows only one active DAG run because the Delta paths are shared;
+do not run standalone transforms concurrently. Source Delta versions and BigQuery
+job IDs are recorded in task logs, and the final Delta manifest is written only after
+all uploads succeed.
+
+Example query (replace the project ID):
+
+```sql
+SELECT event_date, label, flow_count
+FROM `your-project-id.network_security.label_counts`
+WHERE _PARTITIONDATE = CURRENT_DATE('UTC')
+  AND label = 'BENIGN'
+ORDER BY event_date;
+```
+
+Local verification: `python -m unittest discover -s tests -v` after installing
+`requirements.txt`. After a successful live Airflow run, the supported resume line is:
+“Loaded validated Delta tables into date-partitioned BigQuery tables from Airflow.”
