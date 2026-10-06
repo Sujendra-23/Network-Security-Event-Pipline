@@ -25,7 +25,7 @@ services:
       BIGQUERY_PROJECT: ${BIGQUERY_PROJECT:-}
       BIGQUERY_DATASET: ${BIGQUERY_DATASET:-network_security}
       BIGQUERY_LOCATION: ${BIGQUERY_LOCATION:-US}
-      GOOGLE_APPLICATION_CREDENTIALS: /opt/airflow/gcp/application_default_credentials.json
+      GOOGLE_APPLICATION_CREDENTIALS: /opt/airflow/gcp/${GOOGLE_CREDENTIALS_FILE:-application_default_credentials.json}
     volumes:
       - airflow_home:/opt/airflow
       - ./dags:/opt/airflow/dags:ro

@@ -340,7 +340,18 @@ requires your project and credentials.
    # GOOGLE_ADC_DIR=/Users/you/.config/gcloud
    ```
 
-   The Docker setup mounts the ADC directory read-only. Never commit credentials.
+   The Docker setup mounts the ADC directory read-only. Alternatively, to use
+   a service-account JSON key, store it outside this repository (for example,
+   `~/.config/network-security-gcp/key.json`) and set these in `.env`:
+
+   ```dotenv
+   GOOGLE_ADC_DIR=/absolute/path/to/.config/network-security-gcp
+   GOOGLE_CREDENTIALS_FILE=key.json
+   ```
+
+   This mounts the key directory read-only and points `GOOGLE_APPLICATION_CREDENTIALS`
+   at the key inside Airflow, like the Kaggle credentials mount. Ensure the container's
+   Airflow user can read the file. Never commit credentials.
    The authenticated principal needs BigQuery Job User on the project and BigQuery
    Data Editor on the destination dataset; automatic dataset creation additionally
    requires `bigquery.datasets.create` on the project. You may pre-create the dataset
@@ -353,7 +364,9 @@ requires your project and credentials.
 
 All destinations (`network_events`, `label_counts`, `src_ip_window_counts`, and
 `anomaly_threshold_counts`, where available) use **daily ingestion-time partitions**
-(`_PARTITIONDATE`) and **clustering by `label`**. Original `event_date` / `window_date`
+(`_PARTITIONDATE`) and **clustering by `label`** (the normalized Delta column name).
+The load configuration explicitly sets partition retention to 60 days
+(`expiration_ms=5184000000`), including outside the sandbox. Original `event_date` / `window_date`
 columns retain the historical capture date. This is intentional: the sandbox expires
 partitions after 60 days, so event-date partitions from 2017 would expire immediately.
 See [partition expiration](https://cloud.google.com/bigquery/docs/managing-partitioned-tables#partition-expiration).

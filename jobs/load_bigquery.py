@@ -59,7 +59,10 @@ def load_bigquery(delta_dir: str, project: str, dataset_id: str, location: str,
                 source_format=bigquery.SourceFormat.PARQUET,
                 write_disposition=bigquery.WriteDisposition.WRITE_TRUNCATE,
                 # Ingestion date retains historical CIC-IDS2017 rows in sandbox.
-                time_partitioning=bigquery.TimePartitioning(type_=bigquery.TimePartitioningType.DAY),
+                time_partitioning=bigquery.TimePartitioning(
+                    type_=bigquery.TimePartitioningType.DAY,
+                    expiration_ms=60 * 24 * 60 * 60 * 1000,
+                ),
                 clustering_fields=["label"],
             )
             target = f"{project}.{dataset_id}.{name}"

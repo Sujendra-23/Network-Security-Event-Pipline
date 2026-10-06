@@ -45,7 +45,7 @@ class BigQueryLoadTests(unittest.TestCase):
         self.assertEqual(len(report), 4)
         for data, config in self.uploaded.values():
             self.assertEqual(data["event_date"].to_pylist(), [date(2017, 7, 3)])
-            self.assertEqual(config["load"]["timePartitioning"], {"type": "DAY"})
+            self.assertEqual(config["load"]["timePartitioning"], { "type": "DAY", "expirationMs": "5184000000"})
             self.assertEqual(config["load"]["clustering"]["fields"], ["label"])
             self.assertEqual(config["load"]["writeDisposition"], "WRITE_TRUNCATE")
 
