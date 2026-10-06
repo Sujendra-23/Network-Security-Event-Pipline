@@ -1,6 +1,6 @@
 """Network Security Event Pipeline DAG.
 
-ingest_raw -> spark_transform -> validate_output -> load_bigquery -> write_delta_table
+ingest_raw -> spark_transform -> validate_output -> load_bigquery -> retain_delta -> write_delta_table
 
 Runs entirely inside this DAG's own Docker container (see Dockerfile.airflow
 and docker-compose.yaml at the project root) against Spark local[*] mode --
@@ -19,6 +19,7 @@ need instead.
   the run is trustworthy enough to publish.
 - load_bigquery: uploads validated Delta snapshots to daily ingestion-time
   partitioned BigQuery tables clustered by label.
+- retain_delta: applies Delta retention properties and audits VACUUM results.
 - write_delta_table: runs dags/publish_manifest.py, which only executes
   after validation passes, and records each Delta table's version + row
   count to data/delta/_manifest.json as the "this run is published" marker.
@@ -90,18 +91,27 @@ with DAG(
         ),
     )
 
-    def _write_delta_table() -> None:
+    retain_delta = BashOperator(
+        task_id="retain_delta",
+        bash_command=(
+            f"cd {PROJECT_ROOT} && python3 jobs/retain_delta.py "
+            f"--delta-dir {DELTA_DIR}"
+        ),
+    )
+
+    def _write_delta_table(run_id: str) -> None:
         import sys
 
         sys.path.insert(0, os.path.dirname(__file__))
         from publish_manifest import publish_manifest
 
-        manifest = publish_manifest(DELTA_DIR, f"{DELTA_DIR}/_manifest.json")
+        manifest = publish_manifest(DELTA_DIR, f"{DELTA_DIR}/_manifest.json", run_id=run_id)
         print(manifest)
 
     write_delta_table = PythonOperator(
         task_id="write_delta_table",
         python_callable=_write_delta_table,
+        op_kwargs={"run_id": "{{ run_id }}"},
     )
 
-    ingest_raw >> spark_transform >> validate_output >> load_bigquery >> write_delta_table
+    ingest_raw >> spark_transform >> validate_output >> load_bigquery >> retain_delta >> write_delta_table

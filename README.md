@@ -24,7 +24,7 @@ Kaggle (CIC-IDS2017 mirror)
 
   * only written if the raw data has a source-IP column (see "Dataset" below)
 
-Orchestrated by Airflow: ingest_raw -> spark_transform -> validate_output -> load_bigquery -> write_delta_table
+Orchestrated by Airflow: ingest_raw -> spark_transform -> validate_output -> load_bigquery -> retain_delta -> write_delta_table
 ```
 
 ## Dataset
@@ -147,7 +147,7 @@ Java 17 + PySpark + Delta, via `Dockerfile.airflow`) runs the DAG in
 `dags/network_security_pipeline_dag.py`:
 
 ```
-ingest_raw -> spark_transform -> validate_output -> load_bigquery -> write_delta_table
+ingest_raw -> spark_transform -> validate_output -> load_bigquery -> retain_delta -> write_delta_table
 ```
 
 - **ingest_raw**: `scripts/download_dataset.sh` (idempotent).
@@ -316,7 +316,7 @@ the fixture.
 ## BigQuery sandbox destination
 
 The DAG now requires BigQuery configuration and follows:
-`ingest_raw -> spark_transform -> validate_output -> load_bigquery -> write_delta_table`.
+`ingest_raw -> spark_transform -> validate_output -> load_bigquery -> retain_delta -> write_delta_table`.
 The earlier end-to-end Airflow results above predate this addition. The new loader
 has local fixture tests with a mocked BigQuery client; a live cloud load still
 requires your project and credentials.
@@ -399,3 +399,52 @@ ORDER BY event_date;
 Local verification: `python -m unittest discover -s tests -v` after installing
 `requirements.txt`. After a successful live Airflow run, the supported resume line is:
 “Loaded validated Delta tables into date-partitioned BigQuery tables from Airflow.”
+
+
+## Delta retention and lifecycle audit
+
+`retain_delta` runs after a successful BigQuery load and before `write_delta_table`
+on each manually triggered pipeline run. It applies these properties (also set by
+new Spark writes):
+
+| Property | Retention |
+| --- | --- |
+| `delta.logRetentionDuration` | `interval 30 days` |
+| `delta.deletedFileRetentionDuration` | `interval 7 days` |
+
+The task uses delta-rs to preview and execute VACUUM with the configured retention
+and safety check enabled. Current table data is preserved regardless of event date;
+only obsolete files past the retention threshold are eligible. This is storage
+cleanup, not deletion of active records after seven days. Log cleanup happens with
+Delta checkpoints; VACUUM does not remove transaction logs. Historical versions
+whose data files were removed can no longer be read, even if their log entries
+remain. See the [Delta retention properties](https://docs.delta.io/table-properties/)
+and [VACUUM documentation](https://docs.delta.io/delta-utility/).
+
+Per-run JSON audits live under `data/delta/_retention/`, outside the table directories.
+They capture properties, candidates, observed removed files and counts, versions,
+timestamps, and attempt status. Audit writes use atomic file replacement. Retries
+preserve earlier attempts; interrupted attempts remain marked as running rather than
+claiming deletion succeeded. Because delta-rs can return tombstones for files that
+are already absent, removal counts use files present before VACUUM and absent after.
+A process interruption between deletion and audit completion can leave an incomplete
+attempt; it is not an exact accounting of that interrupted attempt's deletions.
+
+The final `_manifest.json` embeds the successful run's audit. Publication rejects a
+missing/failed audit or a table changed since retention. Do not run external writers,
+VACUUM, or long-lived readers concurrently with this local pipeline. Keep reader and
+writer durations below seven days. Airflow serializes DAG runs with `max_active_runs=1`.
+Audits themselves are retained indefinitely. There is no independent cleanup schedule;
+retention runs when the DAG is triggered and upstream tasks succeed.
+
+For a standalone local run (after validation):
+
+```bash
+python jobs/retain_delta.py --delta-dir data/delta --run-id manual-retention-1
+python dags/publish_manifest.py --delta-dir data/delta --run-id manual-retention-1
+```
+
+Tests: `python -m unittest discover -s tests -v`. Retention fixtures exercise real
+Delta VACUUM with expired synthetic tombstones and verify current/recent data survive,
+retry counts remain accurate, and failed audits cannot be published. The Google Cloud
+load still requires project configuration before a complete live Airflow run.

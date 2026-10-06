@@ -39,6 +39,7 @@ from schema import (
     strip_column_whitespace,
 )
 from spark_session import get_spark
+from retain_delta import PROPERTIES
 
 # CIC-IDS2017 was captured Monday July 3 - Friday July 7, 2017. Several
 # Kaggle mirrors strip the Timestamp column for privacy; we fall back to
@@ -138,6 +139,7 @@ def write_delta(df: DataFrame, path: str, partition_cols: list[str]) -> None:
         df.write.format("delta")
         .mode("overwrite")
         .option("overwriteSchema", "true")
+        .options(**PROPERTIES)
         .partitionBy(*partition_cols)
         .save(path)
     )
