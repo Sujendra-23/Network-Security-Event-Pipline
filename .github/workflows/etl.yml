@@ -1,0 +1,38 @@
+name: ETL checks
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+concurrency:
+  group: etl-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  pipeline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Build pinned Airflow + Java + Spark image
+        run: docker build -f Dockerfile.airflow -t network-security-airflow:ci .
+      - name: Unit tests, forced task failure, DAG import, fixture ETL and Iceberg demos
+        run: |
+          docker run --rm \
+            --entrypoint bash \
+            -v "$PWD:/workspace:ro" -w /workspace \
+            -e AIRFLOW_HOME=/tmp/airflow-ci \
+            -e AIRFLOW__CORE__LOAD_EXAMPLES=false \
+            -e AIRFLOW__CORE__UNIT_TEST_MODE=true \
+            -e PROJECT_ROOT=/workspace \
+            -e SPARK_MASTER='local[2]' \
+            -e SPARK_SHUFFLE_PARTITIONS=2 \
+            -e SPARK_DRIVER_MEMORY=2g \
+            -e SPARK_LOCAL_IP=127.0.0.1 \
+            network-security-airflow:ci -euc '
+              airflow db migrate
+              python -m unittest discover -s tests -v
+              python scripts/check_dag_imports.py
+              python tests/fixture_etl.py
+            '

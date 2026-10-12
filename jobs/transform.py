@@ -27,11 +27,15 @@ orchestrate this from Airflow, shell out to `python transform.py`
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import shutil
+import time
+from pathlib import Path
 
-from pyspark.sql import DataFrame, functions as F
-
+from pyspark.sql import DataFrame
+from pyspark.sql import functions as F
+from retain_delta import PROPERTIES
 from schema import (
     REQUIRED_COLUMNS,
     resolve_columns,
@@ -39,7 +43,6 @@ from schema import (
     strip_column_whitespace,
 )
 from spark_session import get_spark
-from retain_delta import PROPERTIES
 
 # CIC-IDS2017 was captured Monday July 3 - Friday July 7, 2017. Several
 # Kaggle mirrors strip the Timestamp column for privacy; we fall back to
@@ -109,7 +112,8 @@ def clean(df: DataFrame, cols: dict[str, str]) -> DataFrame:
     fallback_date = F.lit(None).cast("date")
     for keyword, date_str in FILENAME_DATE_HINTS.items():
         fallback_date = F.when(
-            F.lower(F.col("_source_file")).contains(keyword), F.lit(date_str).cast("date")
+            F.lower(F.col("_source_file")).contains(keyword),
+            F.lit(date_str).cast("date"),
         ).otherwise(fallback_date)
 
     if "timestamp" in cols:
@@ -158,7 +162,11 @@ def build_src_ip_window_counts(df: DataFrame, cols: dict[str, str]) -> DataFrame
     windowed = (
         df.filter(F.col("event_time").isNotNull())
         .withColumn("_bytes", bytes_expr)
-        .groupBy(F.col(src_ip).alias("source_ip"), "label", F.window("event_time", "5 minutes"))
+        .groupBy(
+            F.col(src_ip).alias("source_ip"),
+            "label",
+            F.window("event_time", "5 minutes"),
+        )
         .agg(
             F.count("*").alias("flow_count"),
             F.sum("_bytes").alias("total_bytes"),
@@ -203,13 +211,16 @@ def build_anomaly_threshold_counts(
     # -- 4x lower. This is a one-time full-column stat, not a hot path, so
     # paying for the exact computation is worth it over a silently-wrong
     # threshold that flags zero anomalies.
-    threshold = benign_rates.approxQuantile(rate_col, [0.99], 0.0)[0]
+    quantiles = benign_rates.approxQuantile(rate_col, [0.99], 0.0)
+    if not quantiles:
+        return None
+    threshold = quantiles[0]
     if threshold is None:
         return None
 
-    flagged = df.withColumn(
-        "is_anomalous", F.col(rate_col) > F.lit(threshold)
-    ).filter(F.col("is_anomalous"))
+    flagged = df.withColumn("is_anomalous", F.col(rate_col) > F.lit(threshold)).filter(
+        F.col("is_anomalous")
+    )
 
     group_cols = ["event_date", "label"]
     if "source_ip" in cols:
@@ -224,60 +235,146 @@ def build_anomaly_threshold_counts(
     return result
 
 
+def run_transform(
+    raw_dir: str,
+    delta_dir: str,
+    *,
+    cache_mode: str = "narrow",
+    plans_dir: str | None = None,
+) -> dict:
+    """Full fact write plus exact aggregates; measure actions, not lazy plans.
+
+    full reproduces the prior cache strategy; narrow caches the aggregate
+    projection from the written Delta fact; none reads that fact without
+    caching and lets Parquet prune each action's columns.
+    """
+    if cache_mode not in ("full", "narrow", "none"):
+        raise ValueError(f"Unknown cache mode: {cache_mode}")
+    start = time.perf_counter()
+    spark = get_spark("network-security-transform")
+    cached = None
+    timings = {}
+    report = {
+        "cache_mode": cache_mode,
+        "settings": {
+            k: spark.conf.get(k)
+            for k in (
+                "spark.sql.adaptive.enabled",
+                "spark.sql.shuffle.partitions",
+                "spark.sql.parquet.compression.codec",
+                "spark.sql.session.timeZone",
+            )
+        },
+    }
+
+    def write(df, name, partitions):
+        began = time.perf_counter()
+        write_delta(df, f"{delta_dir}/{name}", partitions)
+        timings[name] = time.perf_counter() - began
+        if plans_dir:
+            Path(plans_dir).mkdir(parents=True, exist_ok=True)
+            Path(plans_dir, f"{name}.txt").write_text(
+                df._jdf.queryExecution().toString()
+            )
+        print(f"[transform] wrote {name}")
+
+    def remove_optional(name):
+        if os.path.exists(f"{delta_dir}/{name}"):
+            shutil.rmtree(f"{delta_dir}/{name}")
+        print(f"[transform] skipped {name}: missing optional input")
+
+    try:
+        began = time.perf_counter()
+        raw = read_raw(spark, raw_dir)
+        cols = resolve_columns(raw)
+        raw, cols = sanitize_for_delta(raw, cols)
+        missing = [c for c in REQUIRED_COLUMNS if c not in cols]
+        if missing:
+            raise ValueError(f"Raw data is missing required columns: {missing}")
+        cleaned = clean(raw, cols)
+        timings["read_and_plan"] = time.perf_counter() - began
+        if cache_mode == "full":
+            cached = cleaned.cache()
+            cleaned = cached
+            began = time.perf_counter()
+            report["cleaned_rows"] = cleaned.count()
+            timings["materialize"] = time.perf_counter() - began
+        write(cleaned, "network_events", ["event_date", "attack_category"])
+        if cache_mode != "full":
+            # The 80-column fact table is written once. Only these columns are
+            # needed by the repeated count, label, quantile and window actions.
+            needed = {"event_date", "event_time", "label", "attack_category"}
+            needed.update(
+                cols[c]
+                for c in (
+                    "source_ip",
+                    "flow_packets_per_sec",
+                    "total_len_fwd_packets",
+                    "total_len_bwd_packets",
+                )
+                if c in cols
+            )
+            # Reuse the materialized fact table instead of parsing CSV again.
+            # Parquet column pruning reads only the aggregate projection.
+            cleaned = (
+                spark.read.format("delta")
+                .load(f"{delta_dir}/network_events")
+                .select(*sorted(needed))
+            )
+            if cache_mode == "narrow":
+                cached = cleaned.cache()
+                cleaned = cached
+        if cache_mode != "full":
+            began = time.perf_counter()
+            report["cleaned_rows"] = cleaned.count()
+            timings["materialize"] = time.perf_counter() - began
+        print(f"[transform] cleaned rows: {report['cleaned_rows']}")
+        write(build_label_counts(cleaned), "label_counts", ["event_date"])
+        window_counts = build_src_ip_window_counts(cleaned, cols)
+        if window_counts is not None:
+            write(window_counts, "src_ip_window_counts", ["window_date"])
+        else:
+            remove_optional("src_ip_window_counts")
+        began = time.perf_counter()
+        anomaly_counts = build_anomaly_threshold_counts(cleaned, cols)
+        timings["exact_quantile"] = time.perf_counter() - began
+        if anomaly_counts is not None:
+            write(anomaly_counts, "anomaly_threshold_counts", ["event_date"])
+        else:
+            remove_optional("anomaly_threshold_counts")
+        report["cached_columns"] = len(cached.columns) if cached is not None else 0
+        report["input_partitions"] = raw.rdd.getNumPartitions()
+        report["timings_seconds"] = timings
+    finally:
+        if cached is not None:
+            cached.unpersist()
+        spark.stop()
+    report["wall_seconds"] = time.perf_counter() - start
+    return report
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--raw-dir", default=os.environ.get("DATA_RAW_DIR", "data/raw"))
-    parser.add_argument("--delta-dir", default=os.environ.get("DATA_DELTA_DIR", "data/delta"))
+    parser.add_argument(
+        "--delta-dir", default=os.environ.get("DATA_DELTA_DIR", "data/delta")
+    )
+    parser.add_argument(
+        "--cache-mode", choices=["full", "narrow", "none"], default="narrow"
+    )
+    parser.add_argument("--plans-dir", help="Write explain plans for benchmark review")
+    parser.add_argument("--metrics", help="Write measured timings as JSON")
     args = parser.parse_args()
-
-    spark = get_spark("network-security-transform")
-
-    raw = read_raw(spark, args.raw_dir)
-    cols = resolve_columns(raw)
-    raw, cols = sanitize_for_delta(raw, cols)
-
-    missing = [c for c in REQUIRED_COLUMNS if c not in cols]
-    if missing:
-        raise ValueError(
-            f"Raw data is missing required columns (resolved via schema.py aliases): {missing}. "
-            f"Columns found: {sorted(raw.columns)}"
-        )
-
-    cleaned = clean(raw, cols).cache()
-    total_rows = cleaned.count()
-    print(f"[transform] cleaned rows: {total_rows}")
-
-    write_delta(cleaned, f"{args.delta_dir}/network_events", ["event_date", "attack_category"])
-    print("[transform] wrote network_events")
-
-    label_counts = build_label_counts(cleaned)
-    write_delta(label_counts, f"{args.delta_dir}/label_counts", ["event_date"])
-    print("[transform] wrote label_counts")
-
-    window_counts = build_src_ip_window_counts(cleaned, cols)
-    if window_counts is not None:
-        write_delta(window_counts, f"{args.delta_dir}/src_ip_window_counts", ["window_date"])
-        print("[transform] wrote src_ip_window_counts")
-    else:
-        if os.path.exists(f"{args.delta_dir}/src_ip_window_counts"):
-            shutil.rmtree(f"{args.delta_dir}/src_ip_window_counts")
-        print("[transform] skipped src_ip_window_counts: no source IP column in this data")
-
-    anomaly_counts = build_anomaly_threshold_counts(cleaned, cols)
-    if anomaly_counts is not None:
-        write_delta(
-            anomaly_counts, f"{args.delta_dir}/anomaly_threshold_counts", ["event_date"]
-        )
-        print("[transform] wrote anomaly_threshold_counts")
-    else:
-        if os.path.exists(f"{args.delta_dir}/anomaly_threshold_counts"):
-            shutil.rmtree(f"{args.delta_dir}/anomaly_threshold_counts")
-        print(
-            "[transform] skipped anomaly_threshold_counts: no Flow Packets/s column in this data"
-        )
-
-    cleaned.unpersist()
-    spark.stop()
+    report = run_transform(
+        args.raw_dir,
+        args.delta_dir,
+        cache_mode=args.cache_mode,
+        plans_dir=args.plans_dir,
+    )
+    if args.metrics:
+        Path(args.metrics).parent.mkdir(parents=True, exist_ok=True)
+        Path(args.metrics).write_text(json.dumps(report, indent=2) + "\n")
+    print(json.dumps(report, indent=2))
 
 
 if __name__ == "__main__":

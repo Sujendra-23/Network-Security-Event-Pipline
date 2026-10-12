@@ -1,7 +1,7 @@
 # Network Security Event Pipeline
 
 Ingests the CIC-IDS2017 network intrusion dataset, cleans and aggregates it
-with Spark, writes the result to Delta Lake tables, and orchestrates the
+with Spark, writes the result to Delta Lake and Apache Iceberg tables, and orchestrates the
 whole thing with Airflow.
 
 ## Architecture
@@ -22,9 +22,12 @@ Kaggle (CIC-IDS2017 mirror)
     src_ip_window_counts       (flows per source IP per 5-min window)*
     anomaly_threshold_counts   (flows exceeding a benign-derived rate threshold)
 
+  Validated Delta snapshots -> jobs/write_iceberg.py -> data/iceberg/security/
+    (same fact table and available aggregates in Iceberg format v2)
+
   * only written if the raw data has a source-IP column (see "Dataset" below)
 
-Orchestrated by Airflow: ingest_raw -> spark_transform -> validate_output -> load_bigquery -> retain_delta -> write_delta_table
+Orchestrated by Airflow: ingest_raw -> spark_transform -> validate_output -> write_iceberg -> load_bigquery -> retain_delta -> write_delta_table
 ```
 
 ## Dataset
@@ -110,8 +113,8 @@ independent verification. Instead it:
 1. Re-implements the label-count aggregate from scratch in pandas, against
    the smallest raw CSV file (a natural "small sample" of the full
    multi-file dataset).
-2. Cross-checks those counts exactly against Spark's `label_counts` Delta
-   table, filtered to that file's capture date.
+2. Cross-checks those counts exactly against the `network_events` Delta
+   snapshot, filtered to the same raw filename, then grouped by label.
 3. Runs a cheap structural check across the *whole* raw dataset (line
    counting only, no full load into memory): cleaned rows in
    `network_events` must be <= total raw rows, since cleaning only ever
@@ -140,6 +143,119 @@ pipeline output.
 
 Delete `data/delta_demo/` any time to reset both demos.
 
+## Failure recovery and alerts
+
+All seven DAG tasks get three retries, starting at one minute with
+exponential backoff and a ten-minute cap (Airflow adds jitter), a one-hour
+execution timeout, a 90-minute SLA, and a terminal-failure callback.
+The callback sends a DAG/task/run identifier and log link; it does not
+include exception payloads or credentials. Delivery errors are logged
+without exposing the webhook URL or replacing the original task error.
+
+Configure either or both destinations in your untracked `.env`:
+
+```dotenv
+PIPELINE_SLACK_WEBHOOK_URL=https://hooks.slack.com/services/REPLACE_WITH_SECRET
+PIPELINE_ALERT_EMAILS=you@example.com
+SMTP_HOST=smtp.example.com
+SMTP_PORT=587
+SMTP_USER=airflow
+SMTP_PASSWORD=REPLACE_WITH_SECRET
+SMTP_MAIL_FROM=airflow@example.com
+# Optional: scheduled refreshes of the fixed historical dataset
+PIPELINE_SCHEDULE=0 2 * * *
+```
+
+The default remains manual (`schedule=None`). **Airflow 2.9 does not check
+SLAs for manually triggered runs**, so the SLA callback requires scheduled
+runs and the scheduler's default `check_slas=true`. Manual runs still get
+execution timeouts, retries and failure alerts. See the
+[Airflow 2.9 SLA documentation](https://airflow.apache.org/docs/apache-airflow/2.9.3/core-concepts/tasks.html#slas).
+With no destinations configured, callbacks log a warning. Tests mock all
+outbound delivery; they never post to Slack or send email.
+
+## Continuous integration
+
+`.github/workflows/etl.yml` runs on every push and pull request. It builds
+`Dockerfile.airflow` (Airflow 2.9.3, Python 3.11, Java 17, Spark 3.5.3,
+Delta 3.2.1), then runs unit tests, a real failing-task callback test, a
+strict DAG import check, and `tests/fixture_etl.py` inside that image.
+The image pins Airflow and compatible pandas/numpy during dependency
+installation; otherwise a resolver can change the deployed Airflow version.
+
+The fixture uses public documentation IP ranges and needs no Kaggle,
+BigQuery, Slack or SMTP credentials. It exercises nonfinite rates, label
+cleaning, time windows, the exact benign p99, both table formats, repeat
+export without duplicates, optional-table cleanup, and both sets of
+schema evolution/time travel demos. Spark uses two cores and 2 GB for CI.
+This validates the ETL components; live BigQuery delivery still requires
+credentials and is covered locally by mocked-client tests.
+
+Run the same checks locally:
+
+```bash
+docker build -f Dockerfile.airflow -t network-security-airflow:ci .
+docker run --rm --entrypoint bash -v "$PWD:/workspace:ro" -w /workspace \
+  -e AIRFLOW_HOME=/tmp/airflow-ci -e AIRFLOW__CORE__LOAD_EXAMPLES=false \
+  -e AIRFLOW__CORE__UNIT_TEST_MODE=true -e PROJECT_ROOT=/workspace \
+  -e SPARK_MASTER='local[2]' -e SPARK_SHUFFLE_PARTITIONS=2 \
+  -e SPARK_DRIVER_MEMORY=2g -e SPARK_LOCAL_IP=127.0.0.1 \
+  network-security-airflow:ci -euc '
+    airflow db migrate
+    python -m unittest discover -s tests -v
+    python scripts/check_dag_imports.py
+    python tests/fixture_etl.py
+  '
+```
+
+## Apache Iceberg: export, schema evolution and time travel
+
+`jobs/write_iceberg.py` reads pinned, validated Delta versions and writes
+`iceberg.security.network_events`, `label_counts`, and the optional
+`src_ip_window_counts` and `anomaly_threshold_counts`. It uses the Spark
+3.5 / Scala 2.12 Iceberg 1.10.0 runtime and a separate Hadoop catalog at
+`data/iceberg`. Delta's catalog remains `spark_catalog`; Iceberg's catalog
+is named `iceberg`. The runtime JAR is resolved from Maven on first use.
+
+```bash
+source scripts/env.sh
+python3 jobs/write_iceberg.py
+python3 iceberg_demos/schema_evolution.py
+python3 iceberg_demos/time_travel.py
+```
+
+Each export replaces a table rather than appending, checks row counts,
+and records Delta versions and Iceberg snapshot IDs. Missing optional
+inputs remove stale catalog tables. Replacement is atomic per table;
+there is no cross-table transaction. The export manifest is removed
+before writes and published only after all tables succeed. Readers that
+need a consistent exported set can use its recorded snapshot IDs.
+A later run invalidates the previous marker until it finishes.
+
+The demos copy the fact table to `iceberg.demo.network_events`, add a
+nullable `threat_intel_score` with `ALTER TABLE ADD COLUMN`, and append
+three rows. They assert that existing rows get null scores and explicitly
+read the original snapshot to recover its original schema and row count.
+They leave `iceberg.security` unchanged. Re-running schema evolution
+resets only the demo table. Delete `data/iceberg/` to reset the local catalog.
+
+| Detail | Delta Lake in this project | Iceberg in this project |
+| --- | --- | --- |
+| Table lookup | Filesystem path and Delta catalog | Named Hadoop catalog + namespace |
+| History | Sequential transaction-log versions | Snapshot IDs and metadata files |
+| Evolution demo | Append with `mergeSchema=true` | Explicit nullable `ADD COLUMN`, then append |
+| Time travel | `versionAsOf` | `snapshot-id` with historical schema |
+| Partitioning here | Explicit date/category columns | Same identity partitions; hidden transforms are available |
+| Downstream use | Validation, BigQuery, retention and publish gate | Independent snapshot export for Spark readers |
+
+Both formats provide snapshot reads and schema evolution. This project
+compares their APIs and correctness, not cross-engine performance.
+The local Hadoop catalog is suitable for this single-writer demo; an
+object-store deployment should use a catalog with appropriate commit
+coordination. References: [Iceberg configuration](https://iceberg.apache.org/docs/1.10.0/spark-configuration/),
+[writes](https://iceberg.apache.org/docs/1.10.0/spark-writes/), and
+[historical schema selection](https://iceberg.apache.org/docs/1.10.0/spark-queries/#schema-selection-in-time-travel-queries).
+
 ## Orchestration (Airflow)
 
 A dedicated single-container Airflow (`apache/airflow:2.9.3-python3.11` +
@@ -147,7 +263,7 @@ Java 17 + PySpark + Delta, via `Dockerfile.airflow`) runs the DAG in
 `dags/network_security_pipeline_dag.py`:
 
 ```
-ingest_raw -> spark_transform -> validate_output -> load_bigquery -> retain_delta -> write_delta_table
+ingest_raw -> spark_transform -> validate_output -> write_iceberg -> load_bigquery -> retain_delta -> write_delta_table
 ```
 
 - **ingest_raw**: `scripts/download_dataset.sh` (idempotent).
@@ -155,6 +271,9 @@ ingest_raw -> spark_transform -> validate_output -> load_bigquery -> retain_delt
 - **validate_output**: `python3 validation/validate_output.py` -- fails
   the task (and halts the DAG) if the cross-check doesn't pass. This is
   the gate that decides whether a run is trustworthy enough to publish.
+- **write_iceberg**: `python3 jobs/write_iceberg.py` -- writes the validated
+  Delta snapshots to Iceberg and records source versions, snapshot IDs and
+  row counts in `data/iceberg/_manifest.json`.
 - **load_bigquery**: `python3 jobs/load_bigquery.py` -- batch-loads the validated
   fact table and available aggregates to BigQuery; fails on upload or row-count errors.
 - **write_delta_table**: `dags/publish_manifest.py`, which only runs after
@@ -316,7 +435,7 @@ the fixture.
 ## BigQuery sandbox destination
 
 The DAG now requires BigQuery configuration and follows:
-`ingest_raw -> spark_transform -> validate_output -> load_bigquery -> retain_delta -> write_delta_table`.
+`ingest_raw -> spark_transform -> validate_output -> write_iceberg -> load_bigquery -> retain_delta -> write_delta_table`.
 The earlier end-to-end Airflow results above predate this addition. The new loader
 has local fixture tests with a mocked BigQuery client; a live cloud load still
 requires your project and credentials.
