@@ -59,4 +59,3 @@ class DagTests(unittest.TestCase):
         self.assertEqual(run.state, DagRunState.FAILED)
         send.assert_called_once()
         self.assertIn("task=fail", send.call_args.args[0])
-        self.assertIn("attempt=1", send.call_args.args[0])

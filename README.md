@@ -44,8 +44,9 @@ mirror instead: [`chethuhn/network-intrusion-dataset`](https://www.kaggle.com/da
 zipped / ~885MB unzipped, 2,830,743 flow records total (confirmed by
 actually downloading and processing it -- see "Real-data findings" below).
 **This mirror does not include Source IP /
-Destination IP / Flow ID columns** (privacy scrubbing before re-upload),
-though `Timestamp` is present. `jobs/schema.py` resolves column names via
+Destination IP / Flow ID / Timestamp columns** (confirmed from all eight
+CSV headers). The pipeline derives `event_date` from the capture filename
+and leaves `event_time` null. `jobs/schema.py` resolves column names via
 aliases and degrades gracefully when optional columns are absent:
 `src_ip_window_counts` and the per-IP breakdown in
 `anomaly_threshold_counts` are simply skipped for this mirror, which is

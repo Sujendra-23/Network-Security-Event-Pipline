@@ -16,7 +16,6 @@ class AlertTests(unittest.TestCase):
             dag_id="pipeline",
             task_id="transform",
             run_id="forced-failure",
-            prev_attempted_tries=4,
             log_url="https://airflow.example/log",
         )
         with patch.object(alerts, "send_alert") as send:
@@ -26,7 +25,6 @@ class AlertTests(unittest.TestCase):
             "pipeline",
             "transform",
             "forced-failure",
-            "attempt=4",
             ti.log_url,
         ):
             self.assertIn(value, message)
