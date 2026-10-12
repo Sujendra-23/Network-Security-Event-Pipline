@@ -16,7 +16,7 @@ class AlertTests(unittest.TestCase):
             dag_id="pipeline",
             task_id="transform",
             run_id="forced-failure",
-            try_number=4,
+            prev_attempted_tries=4,
             log_url="https://airflow.example/log",
         )
         with patch.object(alerts, "send_alert") as send:

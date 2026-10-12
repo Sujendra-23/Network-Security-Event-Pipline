@@ -82,7 +82,7 @@ supported`. `scripts/env.sh` pins `JAVA_HOME` to a Homebrew-installed Java
 ```bash
 brew install openjdk@17          # once
 python3.13 -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
+python -m pip install -r requirements.txt
 source scripts/env.sh            # JAVA_HOME + venv, every new shell
 ```
 
@@ -142,6 +142,73 @@ pipeline output.
   reconstructable, not just inferred from the current state.
 
 Delete `data/delta_demo/` any time to reset both demos.
+
+## Spark benchmark and optimization
+
+Measured on October 11, 2026 against all **2,830,743 rows** (8 CSV files,
+884,645,759 input bytes), on an Apple M4 with 10 cores,
+24 GiB RAM, Spark 3.5.3 / Delta 3.2.1 / Java 17.0.20.1 / Python 3.13.11.
+Each configuration has three sequential fresh-JVM runs, rotating execution
+order, with fresh Delta output directories. Timing includes Spark creation,
+CSV schema inference, cleaning, the full fact write, exact benign p99,
+aggregate writes, explain-plan capture and Spark stop; Python import time
+is excluded. No other Spark jobs ran concurrently. OS page cache was not
+cleared; desktop activity and thermal/load variation are uncontrolled.
+
+| Configuration | Median seconds | Observed range (3 runs) |
+| --- | ---: | ---: |
+| Full fact cache (baseline) | 42.83 | 36.75–44.42 |
+| 7-column cache from Delta | 35.07 | 31.70–42.37 |
+| No cache, read Delta (default) | 33.31 | 32.33–37.45 |
+| 7-column cache, AQE off | 37.74 | 31.55–43.03 |
+| 7-column cache, 20 shuffle partitions | 38.34 | 35.03–44.85 |
+
+The default now writes the wide fact table once, then reads only aggregate
+columns from that Delta snapshot with Parquet column pruning and **no
+cache**. The before/after median is **42.83s → 33.31s
+(22.2% lower)**. The baseline cached all 83 cleaned
+columns; the narrow-cache alternative cached seven. Aggregate plans show
+`InMemoryTableScan` in the baseline and pruned Parquet reads in the default.
+This avoids materializing an 83-column cache for a fact table written once.
+
+The baseline already used AQE and 10 shuffle partitions. These are not new
+optimizations: the matrix tests AQE off and 20 partitions and retains AQE
+on plus 10 partitions because the no-cache configuration was fastest by
+median. The CSV scan uses 11 input partitions. Fact output remains
+partitioned by `event_date` and `attack_category`; label/anomaly aggregates
+use `event_date`. The source-IP table is absent on this mirror, so its
+window aggregation is covered by the CI fixture, not these timings.
+
+All 15 runs produce 2,830,743 cleaned rows. Full fact schemas, row counts
+and commutative xxhash64 sum/min/max fingerprints match; all aggregate
+rows and exact thresholds match across every configuration. The fingerprint
+is a scalable consistency check, not a mathematical proof of multiset
+equality. CI separately compares complete fixture rows with `exceptAll`
+in both directions between Delta and Iceberg. No threshold approximation
+or reduced-column fact table was used to obtain the speedup.
+
+Raw per-stage timings, input file sizes, configuration, output verification,
+and representative before/after plans are committed in
+[`benchmarks/results/2026-10-11/`](benchmarks/results/2026-10-11/).
+These are local historical-dataset measurements, not a cluster benchmark,
+a timing guarantee, or a Delta-versus-Iceberg performance comparison.
+
+Reproduce the matrix and equality check (the output directory must be new):
+
+```bash
+source scripts/env.sh
+python3 benchmarks/run.py --raw-dir data/raw \
+  --output /tmp/network-security-benchmark-new --repeats 3 --shuffle-partitions 10
+# Individual strategies remain available:
+python3 jobs/transform.py --cache-mode full --delta-dir /tmp/etl-full
+python3 jobs/transform.py --cache-mode narrow --delta-dir /tmp/etl-narrow
+python3 jobs/transform.py --cache-mode none --delta-dir /tmp/etl-none
+```
+
+`SPARK_MASTER`, `SPARK_DRIVER_MEMORY`, `SPARK_SHUFFLE_PARTITIONS`, and
+`SPARK_AQE_ENABLED` can override the local defaults. The shared Spark
+session uses UTC for consistent event windows across host and container.
+See [Spark's caching and AQE guidance](https://spark.apache.org/docs/3.5.7/sql-performance-tuning.html).
 
 ## Failure recovery and alerts
 
@@ -247,6 +314,14 @@ resets only the demo table. Delete `data/iceberg/` to reset the local catalog.
 | Time travel | `versionAsOf` | `snapshot-id` with historical schema |
 | Partitioning here | Explicit date/category columns | Same identity partitions; hidden transforms are available |
 | Downstream use | Validation, BigQuery, retention and publish gate | Independent snapshot export for Spark readers |
+
+Full-data verification also passed: the export contains **2,830,743 fact
+rows**, 19 label aggregates and 12 anomaly aggregates. The isolated demo
+contains 2,830,746 rows after its three-row append, and snapshot time travel
+restores the original 2,830,743 rows and schema. The source is the
+independently validated median no-cache benchmark output; snapshot IDs and
+row counts are recorded in
+[`iceberg-verification.json`](benchmarks/results/2026-10-11/iceberg-verification.json).
 
 Both formats provide snapshot reads and schema evolution. This project
 compares their APIs and correctness, not cross-engine performance.
@@ -425,8 +500,8 @@ the fixture.
   This dataset (~885MB, 2.83M rows) is genuinely large enough to justify
   Spark over pandas -- and large enough that it needed real memory/codec
   tuning to run reliably (see "Real-data findings" above) -- but Spark
-  still held the whole cleaned dataset in a single machine's memory via
-  `.cache()`. It does not stress-test genuine out-of-core / multi-node
+  is processed on one machine; the optimized path no longer caches the
+  wide fact table. It does not stress-test genuine out-of-core / multi-node
   behavior (shuffle over the network, executor failure/recovery, data
   skew across real partitions) the way a real multi-GB/TB production
   workload on an actual cluster would.

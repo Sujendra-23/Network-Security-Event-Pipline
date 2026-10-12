@@ -239,7 +239,7 @@ def run_transform(
     raw_dir: str,
     delta_dir: str,
     *,
-    cache_mode: str = "narrow",
+    cache_mode: str = "none",
     plans_dir: str | None = None,
 ) -> dict:
     """Full fact write plus exact aggregates; measure actions, not lazy plans.
@@ -301,7 +301,7 @@ def run_transform(
             timings["materialize"] = time.perf_counter() - began
         write(cleaned, "network_events", ["event_date", "attack_category"])
         if cache_mode != "full":
-            # The 80-column fact table is written once. Only these columns are
+            # The wide fact table is written once. Only these columns are
             # needed by the repeated count, label, quantile and window actions.
             needed = {"event_date", "event_time", "label", "attack_category"}
             needed.update(
@@ -360,7 +360,7 @@ def main() -> None:
         "--delta-dir", default=os.environ.get("DATA_DELTA_DIR", "data/delta")
     )
     parser.add_argument(
-        "--cache-mode", choices=["full", "narrow", "none"], default="narrow"
+        "--cache-mode", choices=["full", "narrow", "none"], default="none"
     )
     parser.add_argument("--plans-dir", help="Write explain plans for benchmark review")
     parser.add_argument("--metrics", help="Write measured timings as JSON")

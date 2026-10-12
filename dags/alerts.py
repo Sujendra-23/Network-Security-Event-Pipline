@@ -62,7 +62,8 @@ def task_failure_alert(context: dict) -> None:
     ti = context["task_instance"]
     send_alert(
         f"Task failed: dag={ti.dag_id} task={ti.task_id} "
-        f"run={ti.run_id} attempt={ti.try_number}\nLogs: {ti.log_url}"
+        # try_number points to the next attempt once the task is FAILED.
+        f"run={ti.run_id} attempt={ti.prev_attempted_tries}\nLogs: {ti.log_url}"
     )
 
 

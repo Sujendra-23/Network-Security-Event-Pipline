@@ -31,7 +31,7 @@ def export_tables(spark, delta_dir: str, warehouse: str) -> dict:
     marker = Path(warehouse, "_manifest.json")
     marker.unlink(missing_ok=True)
     spark.sql("CREATE NAMESPACE IF NOT EXISTS iceberg.security")
-    report = {"tables": {}}
+    report = {"delta_dir": str(Path(delta_dir).resolve()), "tables": {}}
     for name, partitions in TABLES.items():
         target = f"iceberg.security.{name}"
         path = str(Path(delta_dir, name))
