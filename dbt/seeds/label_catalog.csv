@@ -1,0 +1,16 @@
+label,attack_family,severity
+BENIGN,Benign,info
+Bot,Botnet,high
+DDoS,Denial of Service,high
+DoS GoldenEye,Denial of Service,medium
+DoS Hulk,Denial of Service,medium
+DoS Slowhttptest,Denial of Service,medium
+DoS slowloris,Denial of Service,medium
+FTP-Patator,Brute Force,medium
+Heartbleed,Exploit,critical
+Infiltration,Infiltration,critical
+PortScan,Reconnaissance,low
+SSH-Patator,Brute Force,medium
+Web Attack - Brute Force,Web Attack,medium
+Web Attack - Sql Injection,Web Attack,high
+Web Attack - XSS,Web Attack,medium

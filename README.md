@@ -332,6 +332,82 @@ coordination. References: [Iceberg configuration](https://iceberg.apache.org/doc
 [writes](https://iceberg.apache.org/docs/1.10.0/spark-writes/), and
 [historical schema selection](https://iceberg.apache.org/docs/1.10.0/spark-queries/#schema-selection-in-time-travel-queries).
 
+## dbt analytics layer (bronze / silver / gold)
+
+`dbt/` is a [dbt](https://www.getdbt.com/) project that models the Spark job's Delta output into a
+star schema, using DuckDB (`dbt-duckdb`) as a local warehouse. DuckDB reads the Delta tables
+directly through its `delta` extension, honouring the Delta log, so nothing is copied or converted
+first and no cloud account is needed. It is separate from the Airflow DAG: run it after
+`jobs/transform.py`.
+
+```
+data/delta/network_events ---> bronze.brz_network_events  (view, as written by Spark)
+data/delta/label_counts   ---> bronze.brz_spark_label_counts (view, used to reconcile)
+                                   |
+                                   v
+                        silver.slv_flows   typed rows + deterministic flow_key
+                                   |
+        seeds/label_catalog.csv    |
+              |  snapshot (SCD2)   |
+              v                    v
+   snapshots.snap_label_catalog -> gold.dim_label     gold.dim_date
+                                          \             /
+                                           gold.fact_flows
+```
+
+| Layer | Models | Notes |
+| --- | --- | --- |
+| bronze | `brz_network_events`, `brz_spark_label_counts` | Views over the Delta tables, unchanged. |
+| silver | `slv_flows` | One row per flow. The dataset has no flow id and contains exact duplicate rows, so `flow_key` = md5 of the whole row plus an occurrence number among identical rows. Labels with the invalid-UTF-8 en dash are normalised to `-`. Columns missing from a given CIC-IDS2017 mirror become typed NULLs (`optional_column` macro), the same graceful degradation as `jobs/schema.py`. |
+| gold | `dim_label`, `dim_date`, `fact_flows` | Star schema. `fact_flows` (grain = flow) has `date_key` and `label_key`; `dim_label` adds attack family and severity from the current snapshot row; `dim_date` is a contiguous calendar over the capture week. |
+| snapshot | `snap_label_catalog` | **SCD type 2** over the `label_catalog` seed (`check` strategy on `attack_family`, `severity`): a change closes the old row (`dbt_valid_to`) and adds a new current one. The severities are illustrative assignments, not part of the dataset. |
+
+Tests (37 with `dbt build`): `unique` and `not_null` on every key, `accepted_values` (attack
+category, severity), `relationships` from `fact_flows` to both dimensions, and two custom
+data-quality tests:
+
+* `non_negative` (generic, `warn`): flags flows with a negative duration. On the real dataset this
+  reports **115 rows**, a known CICFlowMeter artifact. They are kept and flagged by
+  `is_duration_valid` rather than silently dropped.
+* `assert_fact_matches_spark_label_counts` (singular, `error`): the star schema must reproduce
+  the Spark job's own per-day, per-label counts exactly. Dropping rows from the fact makes it fail.
+
+### Running it
+
+```bash
+python3 -m venv dbt/.venv && dbt/.venv/bin/pip install -r dbt/requirements.txt
+source dbt/.venv/bin/activate
+cd dbt
+export DATA_DELTA_DIR="$PWD/../data/delta"      # or any directory produced by jobs/transform.py
+dbt build --profiles-dir .                      # seed + snapshot + models + tests
+python scd2_demo.py                             # edits a throwaway copy of the seed; shows SCD2 history
+```
+
+The first run downloads DuckDB's `delta` extension, so it needs network access once. The
+warehouse is `dbt/target/network_security.duckdb` (override with `DBT_DUCKDB_PATH`; ignored by git).
+Query it with any DuckDB client, for example attacks per family per day:
+
+```sql
+select d.full_date, l.attack_family, count(*) as flows
+from gold.fact_flows f
+join gold.dim_date d using (date_key)
+join gold.dim_label l using (label_key)
+where f.is_attack
+group by all order by 1, 2;
+```
+
+To exercise the whole path on the tracked fixture (real Spark job, then dbt) instead of the full
+dataset: `source scripts/env.sh && scripts/dbt_fixture_build.sh`. CI runs the same steps in the
+`dbt` job of `.github/workflows/etl.yml`, plus `scd2_demo.py`.
+
+**Verified on this machine (dbt-core 1.12.5, dbt-duckdb 1.11.0, DuckDB 1.5.6):** `dbt build` against
+the full Spark output (2,830,743 flows, 8 daily files): PASS=44 WARN=1 ERROR=0 in about 5 s;
+`fact_flows` has 2,830,743 rows and 2,830,743 distinct keys, 15 labels, 5 dates. Against the
+fixture: PASS=45 WARN=0. **Not verified:** the new CI job has not been observed running on GitHub
+yet; the delta extension and the models were not tested on Windows or Linux locally; the
+dataset mirror used has no IP or timestamp columns, so no per-source-IP or per-hour dimension
+is modelled.
+
 ## Orchestration (Airflow)
 
 A dedicated single-container Airflow (`apache/airflow:2.9.3-python3.11` +

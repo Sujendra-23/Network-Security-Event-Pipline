@@ -1,0 +1,27 @@
+version: 2
+models:
+  - name: slv_flows
+    description: One typed, cleaned row per network flow (see the model header for the key).
+    columns:
+      - name: flow_key
+        description: Row-hash plus occurrence number; unique per flow.
+        data_tests: [unique, not_null]
+      - name: event_date
+        data_tests: [not_null]
+      - name: label
+        data_tests: [not_null]
+      - name: attack_category
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [BENIGN, ATTACK]
+      - name: flow_duration_us
+        description: >-
+          Flow duration in microseconds as exported by CICFlowMeter. A small number of flows in
+          the real dataset have negative durations (a known CICFlowMeter artifact); they are kept
+          and flagged by is_duration_valid, and surfaced as a warning here.
+        data_tests:
+          - non_negative:
+              config:
+                severity: warn

@@ -1,0 +1,24 @@
+version: 2
+models:
+  - name: brz_network_events
+    description: >-
+      Raw Delta table written by jobs/transform.py (network_events), exposed unchanged. The
+      columns depend on which CIC-IDS2017 mirror was processed; only event_date, label and
+      attack_category are guaranteed.
+    columns:
+      - name: event_date
+        data_tests: [not_null]
+      - name: label
+        data_tests: [not_null]
+      - name: attack_category
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [BENIGN, ATTACK]
+  - name: brz_spark_label_counts
+    description: Spark's flows-per-label-per-day aggregate (label_counts Delta table).
+    columns:
+      - name: event_date
+        data_tests: [not_null]
+      - name: flow_count
+        data_tests: [not_null]

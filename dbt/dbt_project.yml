@@ -1,0 +1,36 @@
+name: network_security
+version: "1.0.0"
+config-version: 2
+profile: network_security
+
+model-paths: ["models"]
+seed-paths: ["seeds"]
+snapshot-paths: ["snapshots"]
+macro-paths: ["macros"]
+test-paths: ["tests"]
+clean-targets: ["target", "dbt_packages"]
+
+vars:
+  # Directory holding the Spark job's Delta tables (jobs/transform.py --delta-dir).
+  # Override with --vars '{delta_dir: /path}' or the DATA_DELTA_DIR environment variable.
+  delta_dir: "{{ env_var('DATA_DELTA_DIR', '../data/delta') }}"
+
+models:
+  network_security:
+    bronze:
+      +schema: bronze
+      +materialized: view
+    silver:
+      +schema: silver
+      +materialized: table
+    gold:
+      +schema: gold
+      +materialized: table
+
+seeds:
+  network_security:
+    +schema: reference
+
+snapshots:
+  network_security:
+    +schema: snapshots

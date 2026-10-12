@@ -1,0 +1,12 @@
+# Local, credential-free profile: DuckDB reading the Spark job's Delta tables through the
+# `delta` extension (installed on first use, so the first run needs network access).
+# Use with:  dbt build --profiles-dir .   (run from this directory)
+network_security:
+  target: dev
+  outputs:
+    dev:
+      type: duckdb
+      path: "{{ env_var('DBT_DUCKDB_PATH', 'target/network_security.duckdb') }}"
+      extensions:
+        - delta
+      threads: 4
