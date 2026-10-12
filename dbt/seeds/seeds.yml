@@ -1,0 +1,18 @@
+version: 2
+seeds:
+  - name: label_catalog
+    description: >-
+      Analyst-maintained mapping from a cleaned CIC-IDS2017 label to an attack family and a
+      severity. The severities are illustrative assignments for this project, not part of the
+      dataset. Changes are tracked as history by the snap_label_catalog snapshot.
+    columns:
+      - name: label
+        data_tests: [unique, not_null]
+      - name: attack_family
+        data_tests: [not_null]
+      - name: severity
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [info, low, medium, high, critical]

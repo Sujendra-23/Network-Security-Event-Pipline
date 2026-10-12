@@ -1,0 +1,43 @@
+version: 2
+models:
+  - name: dim_label
+    description: Attack label with family and severity (current SCD2 version).
+    columns:
+      - name: label_key
+        data_tests: [unique, not_null]
+      - name: label
+        data_tests: [unique, not_null]
+      - name: attack_family
+        data_tests: [not_null]
+      - name: severity
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [info, low, medium, high, critical, unknown]
+  - name: dim_date
+    description: Calendar days spanning the capture period.
+    columns:
+      - name: date_key
+        description: yyyymmdd integer.
+        data_tests: [unique, not_null]
+      - name: full_date
+        data_tests: [unique, not_null]
+  - name: fact_flows
+    description: Network flows. Grain is one flow.
+    columns:
+      - name: flow_key
+        data_tests: [unique, not_null]
+      - name: date_key
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_date')
+                field: date_key
+      - name: label_key
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_label')
+                field: label_key

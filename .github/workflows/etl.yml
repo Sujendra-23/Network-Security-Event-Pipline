@@ -36,3 +36,39 @@ jobs:
               python scripts/check_dag_imports.py
               python tests/fixture_etl.py
             '
+  dbt:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Build pinned Airflow + Java + Spark image
+        run: docker build -f Dockerfile.airflow -t network-security-airflow:ci .
+      - name: Run the Spark job on the CI fixture
+        run: |
+          mkdir -p "$RUNNER_TEMP/delta"
+          chmod 777 "$RUNNER_TEMP/delta"
+          docker run --rm \
+            --entrypoint bash \
+            -v "$PWD:/workspace:ro" -v "$RUNNER_TEMP/delta:/out" -w /workspace \
+            -e PROJECT_ROOT=/workspace \
+            -e SPARK_MASTER='local[2]' \
+            -e SPARK_SHUFFLE_PARTITIONS=2 \
+            -e SPARK_DRIVER_MEMORY=2g \
+            -e SPARK_LOCAL_IP=127.0.0.1 \
+            network-security-airflow:ci -euc \
+            'python jobs/transform.py --raw-dir tests/fixtures/raw --delta-dir /out'
+      - name: Install dbt
+        run: |
+          python3 -m venv "$RUNNER_TEMP/dbt-venv"
+          "$RUNNER_TEMP/dbt-venv/bin/pip" install --quiet -r dbt/requirements.txt
+      - name: dbt build on the Spark output (seed, snapshot, models, tests)
+        working-directory: dbt
+        env:
+          DATA_DELTA_DIR: ${{ runner.temp }}/delta
+          DBT_DUCKDB_PATH: ${{ runner.temp }}/ci.duckdb
+        run: ${{ runner.temp }}/dbt-venv/bin/dbt build --profiles-dir .
+      - name: SCD2 snapshot keeps history
+        run: |
+          PATH="$RUNNER_TEMP/dbt-venv/bin:$PATH" python dbt/scd2_demo.py

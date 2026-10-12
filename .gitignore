@@ -31,3 +31,11 @@ airflow.cfg
 # Iceberg local catalog and generated benchmark outputs
 data/iceberg/
 benchmarks/local/
+
+# dbt
+dbt/target/
+dbt/logs/
+dbt/dbt_packages/
+*.duckdb
+*.duckdb.wal
+dbt/.user.yml

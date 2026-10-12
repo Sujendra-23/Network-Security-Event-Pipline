@@ -1,0 +1,15 @@
+snapshots:
+  - name: snap_label_catalog
+    relation: ref('label_catalog')
+    description: >-
+      SCD type 2 history of the label catalog. Whenever attack_family or severity of a label
+      changes, the old row is closed (dbt_valid_to) and a new current row is added.
+    config:
+      unique_key: label
+      strategy: check
+      check_cols: [attack_family, severity]
+    columns:
+      - name: label
+        data_tests: [not_null]
+      - name: dbt_scd_id
+        data_tests: [unique, not_null]
