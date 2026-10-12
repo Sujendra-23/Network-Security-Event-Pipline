@@ -1,0 +1,39 @@
+{
+  "status": "pass",
+  "measured_date_local": "2026-10-11",
+  "export": {
+    "delta_dir": "<BENCHMARK_ROOT>/none-aqe-true-p10-2/delta",
+    "tables": {
+      "network_events": {
+        "present": true,
+        "delta_version": 0,
+        "iceberg_snapshot_id": 3004143273450065661,
+        "row_count": 2830743
+      },
+      "label_counts": {
+        "present": true,
+        "delta_version": 0,
+        "iceberg_snapshot_id": 6603488380997903664,
+        "row_count": 19
+      },
+      "src_ip_window_counts": {
+        "present": false
+      },
+      "anomaly_threshold_counts": {
+        "present": true,
+        "delta_version": 0,
+        "iceberg_snapshot_id": 6205076048938384558,
+        "row_count": 12
+      }
+    }
+  },
+  "schema_evolution": {
+    "table": "iceberg.demo.network_events",
+    "before_snapshot_id": 4260473918916859656,
+    "before_rows": 2830743,
+    "after_rows": 2830746
+  },
+  "time_travel": "historical snapshot restored original schema and 2,830,743 rows",
+  "independent_pandas_validation": "pass",
+  "optional_source_ip": "absent on full mirror, covered by fixture"
+}

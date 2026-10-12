@@ -1,0 +1,367 @@
+{
+  "python": "3.13.11",
+  "platform": "macOS-27.0-arm64-arm-64bit-Mach-O",
+  "cores": 10,
+  "input_bytes": {
+    "Friday-WorkingHours-Afternoon-DDos.pcap_ISCX.csv": 77123859,
+    "Friday-WorkingHours-Afternoon-PortScan.pcap_ISCX.csv": 76906168,
+    "Friday-WorkingHours-Morning.pcap_ISCX.csv": 58316725,
+    "Monday-WorkingHours.pcap_ISCX.csv": 176927918,
+    "Thursday-WorkingHours-Afternoon-Infilteration.pcap_ISCX.csv": 83102436,
+    "Thursday-WorkingHours-Morning-WebAttacks.pcap_ISCX.csv": 52023263,
+    "Tuesday-WorkingHours.pcap_ISCX.csv": 135078995,
+    "Wednesday-workingHours.pcap_ISCX.csv": 225166395
+  },
+  "runs": [
+    {
+      "cache_mode": "full",
+      "settings": {
+        "spark.sql.adaptive.enabled": "true",
+        "spark.sql.shuffle.partitions": "10",
+        "spark.sql.parquet.compression.codec": "gzip",
+        "spark.sql.session.timeZone": "UTC"
+      },
+      "cleaned_rows": 2830743,
+      "cached_columns": 83,
+      "input_partitions": 11,
+      "timings_seconds": {
+        "read_and_plan": 4.659252667001056,
+        "materialize": 14.43418825000117,
+        "network_events": 10.72047054199902,
+        "label_counts": 0.7996067080002831,
+        "exact_quantile": 3.773783916998582,
+        "anomaly_threshold_counts": 0.580059916999744
+      },
+      "wall_seconds": 36.746405666999635,
+      "run": "full-aqe-true-p10-1"
+    },
+    {
+      "cache_mode": "narrow",
+      "settings": {
+        "spark.sql.adaptive.enabled": "true",
+        "spark.sql.shuffle.partitions": "10",
+        "spark.sql.parquet.compression.codec": "gzip",
+        "spark.sql.session.timeZone": "UTC"
+      },
+      "cleaned_rows": 2830743,
+      "cached_columns": 7,
+      "input_partitions": 11,
+      "timings_seconds": {
+        "read_and_plan": 5.975612457999887,
+        "network_events": 19.352068792000864,
+        "materialize": 2.5741614580001624,
+        "label_counts": 0.8330881660003797,
+        "exact_quantile": 2.488806041999851,
+        "anomaly_threshold_counts": 0.6354034159994626
+      },
+      "wall_seconds": 35.06525333299942,
+      "run": "narrow-aqe-true-p10-1"
+    },
+    {
+      "cache_mode": "none",
+      "settings": {
+        "spark.sql.adaptive.enabled": "true",
+        "spark.sql.shuffle.partitions": "10",
+        "spark.sql.parquet.compression.codec": "gzip",
+        "spark.sql.session.timeZone": "UTC"
+      },
+      "cleaned_rows": 2830743,
+      "cached_columns": 0,
+      "input_partitions": 11,
+      "timings_seconds": {
+        "read_and_plan": 5.449217499999577,
+        "network_events": 18.340504666000925,
+        "materialize": 0.8358669170011126,
+        "label_counts": 1.0730946249987028,
+        "exact_quantile": 3.494654750000336,
+        "anomaly_threshold_counts": 0.6532595409989881
+      },
+      "wall_seconds": 32.328443292000884,
+      "run": "none-aqe-true-p10-1"
+    },
+    {
+      "cache_mode": "narrow",
+      "settings": {
+        "spark.sql.adaptive.enabled": "false",
+        "spark.sql.shuffle.partitions": "10",
+        "spark.sql.parquet.compression.codec": "gzip",
+        "spark.sql.session.timeZone": "UTC"
+      },
+      "cleaned_rows": 2830743,
+      "cached_columns": 7,
+      "input_partitions": 11,
+      "timings_seconds": {
+        "read_and_plan": 5.630140958999618,
+        "network_events": 18.111494208000295,
+        "materialize": 1.5249912920007773,
+        "label_counts": 0.6302060830003029,
+        "exact_quantile": 1.9847302920006769,
+        "anomaly_threshold_counts": 0.46290570800010755
+      },
+      "wall_seconds": 31.55295549999937,
+      "run": "narrow-aqe-false-p10-1"
+    },
+    {
+      "cache_mode": "narrow",
+      "settings": {
+        "spark.sql.adaptive.enabled": "true",
+        "spark.sql.shuffle.partitions": "20",
+        "spark.sql.parquet.compression.codec": "gzip",
+        "spark.sql.session.timeZone": "UTC"
+      },
+      "cleaned_rows": 2830743,
+      "cached_columns": 7,
+      "input_partitions": 11,
+      "timings_seconds": {
+        "read_and_plan": 5.128277167001215,
+        "network_events": 18.743412874999194,
+        "materialize": 2.9549182079990715,
+        "label_counts": 0.6899091249997582,
+        "exact_quantile": 3.3730008749989793,
+        "anomaly_threshold_counts": 0.7854441660001612
+      },
+      "wall_seconds": 35.025176834000376,
+      "run": "narrow-aqe-true-p20-1"
+    },
+    {
+      "cache_mode": "narrow",
+      "settings": {
+        "spark.sql.adaptive.enabled": "true",
+        "spark.sql.shuffle.partitions": "10",
+        "spark.sql.parquet.compression.codec": "gzip",
+        "spark.sql.session.timeZone": "UTC"
+      },
+      "cleaned_rows": 2830743,
+      "cached_columns": 7,
+      "input_partitions": 11,
+      "timings_seconds": {
+        "read_and_plan": 4.7010532500007685,
+        "network_events": 17.43656354199993,
+        "materialize": 2.4212932499995077,
+        "label_counts": 0.662149292000322,
+        "exact_quantile": 3.021410832998299,
+        "anomaly_threshold_counts": 0.7490209580009832
+      },
+      "wall_seconds": 31.703952707999633,
+      "run": "narrow-aqe-true-p10-2"
+    },
+    {
+      "cache_mode": "none",
+      "settings": {
+        "spark.sql.adaptive.enabled": "true",
+        "spark.sql.shuffle.partitions": "10",
+        "spark.sql.parquet.compression.codec": "gzip",
+        "spark.sql.session.timeZone": "UTC"
+      },
+      "cleaned_rows": 2830743,
+      "cached_columns": 0,
+      "input_partitions": 11,
+      "timings_seconds": {
+        "read_and_plan": 5.113536625000052,
+        "network_events": 19.176236792000054,
+        "materialize": 0.7829024170005141,
+        "label_counts": 1.2668299160013703,
+        "exact_quantile": 3.967768500000602,
+        "anomaly_threshold_counts": 0.7360032919987134
+      },
+      "wall_seconds": 33.30510533300003,
+      "run": "none-aqe-true-p10-2"
+    },
+    {
+      "cache_mode": "narrow",
+      "settings": {
+        "spark.sql.adaptive.enabled": "false",
+        "spark.sql.shuffle.partitions": "10",
+        "spark.sql.parquet.compression.codec": "gzip",
+        "spark.sql.session.timeZone": "UTC"
+      },
+      "cleaned_rows": 2830743,
+      "cached_columns": 7,
+      "input_partitions": 11,
+      "timings_seconds": {
+        "read_and_plan": 5.464831041999787,
+        "network_events": 20.934153582998988,
+        "materialize": 3.7227200419984,
+        "label_counts": 0.8134443330018257,
+        "exact_quantile": 3.1777174579983694,
+        "anomaly_threshold_counts": 0.6158028339996235
+      },
+      "wall_seconds": 37.74419462499827,
+      "run": "narrow-aqe-false-p10-2"
+    },
+    {
+      "cache_mode": "narrow",
+      "settings": {
+        "spark.sql.adaptive.enabled": "true",
+        "spark.sql.shuffle.partitions": "20",
+        "spark.sql.parquet.compression.codec": "gzip",
+        "spark.sql.session.timeZone": "UTC"
+      },
+      "cleaned_rows": 2830743,
+      "cached_columns": 7,
+      "input_partitions": 11,
+      "timings_seconds": {
+        "read_and_plan": 5.667603292000422,
+        "network_events": 22.029935541999293,
+        "materialize": 3.2501657499997236,
+        "label_counts": 0.963913291998324,
+        "exact_quantile": 3.1356988750012533,
+        "anomaly_threshold_counts": 0.6526661669995519
+      },
+      "wall_seconds": 38.343436166000174,
+      "run": "narrow-aqe-true-p20-2"
+    },
+    {
+      "cache_mode": "full",
+      "settings": {
+        "spark.sql.adaptive.enabled": "true",
+        "spark.sql.shuffle.partitions": "10",
+        "spark.sql.parquet.compression.codec": "gzip",
+        "spark.sql.session.timeZone": "UTC"
+      },
+      "cleaned_rows": 2830743,
+      "cached_columns": 83,
+      "input_partitions": 11,
+      "timings_seconds": {
+        "read_and_plan": 6.430561541001225,
+        "materialize": 16.236858874999598,
+        "network_events": 13.833139333000872,
+        "label_counts": 0.7290876660008507,
+        "exact_quantile": 4.326688708999427,
+        "anomaly_threshold_counts": 0.7154454580013407
+      },
+      "wall_seconds": 44.42487962499945,
+      "run": "full-aqe-true-p10-2"
+    },
+    {
+      "cache_mode": "none",
+      "settings": {
+        "spark.sql.adaptive.enabled": "true",
+        "spark.sql.shuffle.partitions": "10",
+        "spark.sql.parquet.compression.codec": "gzip",
+        "spark.sql.session.timeZone": "UTC"
+      },
+      "cleaned_rows": 2830743,
+      "cached_columns": 0,
+      "input_partitions": 11,
+      "timings_seconds": {
+        "read_and_plan": 6.814281167000445,
+        "network_events": 21.41693275000216,
+        "materialize": 0.9611614999994345,
+        "label_counts": 1.3738902080003754,
+        "exact_quantile": 3.836280916002579,
+        "anomaly_threshold_counts": 0.7940786250001111
+      },
+      "wall_seconds": 37.45417720899786,
+      "run": "none-aqe-true-p10-3"
+    },
+    {
+      "cache_mode": "narrow",
+      "settings": {
+        "spark.sql.adaptive.enabled": "false",
+        "spark.sql.shuffle.partitions": "10",
+        "spark.sql.parquet.compression.codec": "gzip",
+        "spark.sql.session.timeZone": "UTC"
+      },
+      "cleaned_rows": 2830743,
+      "cached_columns": 7,
+      "input_partitions": 11,
+      "timings_seconds": {
+        "read_and_plan": 6.313204082998709,
+        "network_events": 23.23176450000028,
+        "materialize": 4.8443493750019115,
+        "label_counts": 0.7886418330017477,
+        "exact_quantile": 3.1459905829979107,
+        "anomaly_threshold_counts": 0.7901958330003254
+      },
+      "wall_seconds": 43.025434209001105,
+      "run": "narrow-aqe-false-p10-3"
+    },
+    {
+      "cache_mode": "narrow",
+      "settings": {
+        "spark.sql.adaptive.enabled": "true",
+        "spark.sql.shuffle.partitions": "20",
+        "spark.sql.parquet.compression.codec": "gzip",
+        "spark.sql.session.timeZone": "UTC"
+      },
+      "cleaned_rows": 2830743,
+      "cached_columns": 7,
+      "input_partitions": 11,
+      "timings_seconds": {
+        "read_and_plan": 8.018599290997372,
+        "network_events": 25.474889999997686,
+        "materialize": 3.034721042000456,
+        "label_counts": 0.8330532500003756,
+        "exact_quantile": 2.9763712499989197,
+        "anomaly_threshold_counts": 0.9638109579973388
+      },
+      "wall_seconds": 44.853571874999034,
+      "run": "narrow-aqe-true-p20-3"
+    },
+    {
+      "cache_mode": "full",
+      "settings": {
+        "spark.sql.adaptive.enabled": "true",
+        "spark.sql.shuffle.partitions": "10",
+        "spark.sql.parquet.compression.codec": "gzip",
+        "spark.sql.session.timeZone": "UTC"
+      },
+      "cleaned_rows": 2830743,
+      "cached_columns": 83,
+      "input_partitions": 11,
+      "timings_seconds": {
+        "read_and_plan": 6.882733249996818,
+        "materialize": 15.77405966600054,
+        "network_events": 11.929358708002837,
+        "label_counts": 0.9332055419981771,
+        "exact_quantile": 4.413616709000053,
+        "anomaly_threshold_counts": 0.7193247499999416
+      },
+      "wall_seconds": 42.83099787500032,
+      "run": "full-aqe-true-p10-3"
+    },
+    {
+      "cache_mode": "narrow",
+      "settings": {
+        "spark.sql.adaptive.enabled": "true",
+        "spark.sql.shuffle.partitions": "10",
+        "spark.sql.parquet.compression.codec": "gzip",
+        "spark.sql.session.timeZone": "UTC"
+      },
+      "cleaned_rows": 2830743,
+      "cached_columns": 7,
+      "input_partitions": 11,
+      "timings_seconds": {
+        "read_and_plan": 6.666777292000916,
+        "network_events": 22.383038250001846,
+        "materialize": 4.718300042000919,
+        "label_counts": 1.0664182090004033,
+        "exact_quantile": 3.3460626250016503,
+        "anomaly_threshold_counts": 0.688821249998
+      },
+      "wall_seconds": 42.36757370899795,
+      "run": "narrow-aqe-true-p10-3"
+    }
+  ],
+  "measured_date_local": "2026-10-11",
+  "hardware": {
+    "cpu": "Apple M4",
+    "logical_cores": 10,
+    "memory_gib": 24
+  },
+  "software": {
+    "spark": "3.5.3",
+    "delta": "3.2.1",
+    "java": "17.0.20.1",
+    "driver_memory": "6g",
+    "master": "local[*]"
+  },
+  "method": "3 fresh-JVM runs per configuration, rotating order; includes Spark creation/stop and explain-plan capture; OS page cache not cleared; Python process import overhead excluded",
+  "verification": {
+    "status": "pass",
+    "runs": 15,
+    "fact_check": "schema, count, commutative xxhash64 sum/min/max",
+    "aggregate_check": "exact all-row equality"
+  }
+}

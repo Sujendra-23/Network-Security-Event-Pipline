@@ -1,0 +1,9 @@
+.git
+.venv
+.env
+.claude
+.rocketride
+data
+benchmarks/results
+__pycache__
+*.pyc

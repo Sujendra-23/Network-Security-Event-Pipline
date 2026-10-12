@@ -26,3 +26,8 @@ access_token
 logs/
 airflow.db
 airflow.cfg
+.env
+
+# Iceberg local catalog and generated benchmark outputs
+data/iceberg/
+benchmarks/local/

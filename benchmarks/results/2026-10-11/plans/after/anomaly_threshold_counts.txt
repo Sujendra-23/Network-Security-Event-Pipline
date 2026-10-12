@@ -1,0 +1,29 @@
+== Parsed Logical Plan ==
+'Aggregate ['event_date, 'label], ['event_date, 'label, count(1) AS anomalous_flow_count#6727L, 1000000.0 AS threshold_packets_per_sec#6728]
++- Filter is_anomalous#6709: boolean
+   +- Project [Flow_Packets/s#5090, Total_Length_of_Bwd_Packets#5080, Total_Length_of_Fwd_Packets#5079, attack_category#5157, event_date#5156, event_time#5155, label#5153, (Flow_Packets/s#5090 > 1000000.0) AS is_anomalous#6709]
+      +- Project [Flow_Packets/s#5090, Total_Length_of_Bwd_Packets#5080, Total_Length_of_Fwd_Packets#5079, attack_category#5157, event_date#5156, event_time#5155, label#5153]
+         +- Relation [Destination_Port#5075,Flow_Duration#5076,Total_Fwd_Packets#5077,Total_Backward_Packets#5078,Total_Length_of_Fwd_Packets#5079,Total_Length_of_Bwd_Packets#5080,Fwd_Packet_Length_Max#5081,Fwd_Packet_Length_Min#5082,Fwd_Packet_Length_Mean#5083,Fwd_Packet_Length_Std#5084,Bwd_Packet_Length_Max#5085,Bwd_Packet_Length_Min#5086,Bwd_Packet_Length_Mean#5087,Bwd_Packet_Length_Std#5088,Flow_Bytes/s#5089,Flow_Packets/s#5090,Flow_IAT_Mean#5091,Flow_IAT_Std#5092,Flow_IAT_Max#5093,Flow_IAT_Min#5094,Fwd_IAT_Total#5095,Fwd_IAT_Mean#5096,Fwd_IAT_Std#5097,Fwd_IAT_Max#5098,... 59 more fields] parquet
+
+== Analyzed Logical Plan ==
+event_date: date, label: string, anomalous_flow_count: bigint, threshold_packets_per_sec: double
+Aggregate [event_date#5156, label#5153], [event_date#5156, label#5153, count(1) AS anomalous_flow_count#6727L, 1000000.0 AS threshold_packets_per_sec#6728]
++- Filter is_anomalous#6709: boolean
+   +- Project [Flow_Packets/s#5090, Total_Length_of_Bwd_Packets#5080, Total_Length_of_Fwd_Packets#5079, attack_category#5157, event_date#5156, event_time#5155, label#5153, (Flow_Packets/s#5090 > 1000000.0) AS is_anomalous#6709]
+      +- Project [Flow_Packets/s#5090, Total_Length_of_Bwd_Packets#5080, Total_Length_of_Fwd_Packets#5079, attack_category#5157, event_date#5156, event_time#5155, label#5153]
+         +- Relation [Destination_Port#5075,Flow_Duration#5076,Total_Fwd_Packets#5077,Total_Backward_Packets#5078,Total_Length_of_Fwd_Packets#5079,Total_Length_of_Bwd_Packets#5080,Fwd_Packet_Length_Max#5081,Fwd_Packet_Length_Min#5082,Fwd_Packet_Length_Mean#5083,Fwd_Packet_Length_Std#5084,Bwd_Packet_Length_Max#5085,Bwd_Packet_Length_Min#5086,Bwd_Packet_Length_Mean#5087,Bwd_Packet_Length_Std#5088,Flow_Bytes/s#5089,Flow_Packets/s#5090,Flow_IAT_Mean#5091,Flow_IAT_Std#5092,Flow_IAT_Max#5093,Flow_IAT_Min#5094,Fwd_IAT_Total#5095,Fwd_IAT_Mean#5096,Fwd_IAT_Std#5097,Fwd_IAT_Max#5098,... 59 more fields] parquet
+
+== Optimized Logical Plan ==
+Aggregate [event_date#5156, label#5153], [event_date#5156, label#5153, count(1) AS anomalous_flow_count#6727L, 1000000.0 AS threshold_packets_per_sec#6728]
++- Project [event_date#5156, label#5153]
+   +- Filter (isnotnull(Flow_Packets/s#5090) AND (Flow_Packets/s#5090 > 1000000.0))
+      +- Relation [Destination_Port#5075,Flow_Duration#5076,Total_Fwd_Packets#5077,Total_Backward_Packets#5078,Total_Length_of_Fwd_Packets#5079,Total_Length_of_Bwd_Packets#5080,Fwd_Packet_Length_Max#5081,Fwd_Packet_Length_Min#5082,Fwd_Packet_Length_Mean#5083,Fwd_Packet_Length_Std#5084,Bwd_Packet_Length_Max#5085,Bwd_Packet_Length_Min#5086,Bwd_Packet_Length_Mean#5087,Bwd_Packet_Length_Std#5088,Flow_Bytes/s#5089,Flow_Packets/s#5090,Flow_IAT_Mean#5091,Flow_IAT_Std#5092,Flow_IAT_Max#5093,Flow_IAT_Min#5094,Fwd_IAT_Total#5095,Fwd_IAT_Mean#5096,Fwd_IAT_Std#5097,Fwd_IAT_Max#5098,... 59 more fields] parquet
+
+== Physical Plan ==
+AdaptiveSparkPlan isFinalPlan=false
++- HashAggregate(keys=[event_date#5156, label#5153], functions=[count(1)], output=[event_date#5156, label#5153, anomalous_flow_count#6727L, threshold_packets_per_sec#6728])
+   +- Exchange hashpartitioning(event_date#5156, label#5153, 10), ENSURE_REQUIREMENTS, [plan_id=639]
+      +- HashAggregate(keys=[event_date#5156, label#5153], functions=[partial_count(1)], output=[event_date#5156, label#5153, count#6865L])
+         +- Project [event_date#5156, label#5153]
+            +- Filter (isnotnull(Flow_Packets/s#5090) AND (Flow_Packets/s#5090 > 1000000.0))
+               +- FileScan parquet [Flow_Packets/s#5090,label#5153,event_date#5156,attack_category#5157] Batched: true, DataFilters: [isnotnull(Flow_Packets/s#5090), (Flow_Packets/s#5090 > 1000000.0)], Format: Parquet, Location: PreparedDeltaFileIndex(1 paths)[file:/private<BENCHMARK_ROOT>/none-aqe-tr..., PartitionFilters: [], PushedFilters: [IsNotNull(`Flow_Packets/s`), GreaterThan(`Flow_Packets/s`,1000000.0)], ReadSchema: struct<Flow_Packets/s:double,label:string>

@@ -19,6 +19,10 @@ export JAVA_HOME="/opt/homebrew/opt/openjdk@17"
 export PATH="$JAVA_HOME/bin:$PATH"
 
 source "$PROJECT_ROOT/.venv/bin/activate"
+# activate embeds the venv's creation path. Resolve it again so a moved
+# project (including paths with spaces) still selects its own interpreter.
+export VIRTUAL_ENV="$PROJECT_ROOT/.venv"
+export PATH="$VIRTUAL_ENV/bin:$JAVA_HOME/bin:$PATH"
 
 export PROJECT_ROOT
 export DATA_RAW_DIR="$PROJECT_ROOT/data/raw"

@@ -1,7 +1,7 @@
 # Network Security Event Pipeline
 
 Ingests the CIC-IDS2017 network intrusion dataset, cleans and aggregates it
-with Spark, writes the result to Delta Lake tables, and orchestrates the
+with Spark, writes the result to Delta Lake and Apache Iceberg tables, and orchestrates the
 whole thing with Airflow.
 
 ## Architecture
@@ -22,9 +22,12 @@ Kaggle (CIC-IDS2017 mirror)
     src_ip_window_counts       (flows per source IP per 5-min window)*
     anomaly_threshold_counts   (flows exceeding a benign-derived rate threshold)
 
+  Validated Delta snapshots -> jobs/write_iceberg.py -> data/iceberg/security/
+    (same fact table and available aggregates in Iceberg format v2)
+
   * only written if the raw data has a source-IP column (see "Dataset" below)
 
-Orchestrated by Airflow: ingest_raw -> spark_transform -> validate_output -> load_bigquery -> retain_delta -> write_delta_table
+Orchestrated by Airflow: ingest_raw -> spark_transform -> validate_output -> write_iceberg -> load_bigquery -> retain_delta -> write_delta_table
 ```
 
 ## Dataset
@@ -41,8 +44,9 @@ mirror instead: [`chethuhn/network-intrusion-dataset`](https://www.kaggle.com/da
 zipped / ~885MB unzipped, 2,830,743 flow records total (confirmed by
 actually downloading and processing it -- see "Real-data findings" below).
 **This mirror does not include Source IP /
-Destination IP / Flow ID columns** (privacy scrubbing before re-upload),
-though `Timestamp` is present. `jobs/schema.py` resolves column names via
+Destination IP / Flow ID / Timestamp columns** (confirmed from all eight
+CSV headers). The pipeline derives `event_date` from the capture filename
+and leaves `event_time` null. `jobs/schema.py` resolves column names via
 aliases and degrades gracefully when optional columns are absent:
 `src_ip_window_counts` and the per-IP breakdown in
 `anomaly_threshold_counts` are simply skipped for this mirror, which is
@@ -79,7 +83,7 @@ supported`. `scripts/env.sh` pins `JAVA_HOME` to a Homebrew-installed Java
 ```bash
 brew install openjdk@17          # once
 python3.13 -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
+python -m pip install -r requirements.txt
 source scripts/env.sh            # JAVA_HOME + venv, every new shell
 ```
 
@@ -110,8 +114,8 @@ independent verification. Instead it:
 1. Re-implements the label-count aggregate from scratch in pandas, against
    the smallest raw CSV file (a natural "small sample" of the full
    multi-file dataset).
-2. Cross-checks those counts exactly against Spark's `label_counts` Delta
-   table, filtered to that file's capture date.
+2. Cross-checks those counts exactly against the `network_events` Delta
+   snapshot, filtered to the same raw filename, then grouped by label.
 3. Runs a cheap structural check across the *whole* raw dataset (line
    counting only, no full load into memory): cleaned rows in
    `network_events` must be <= total raw rows, since cleaning only ever
@@ -140,6 +144,194 @@ pipeline output.
 
 Delete `data/delta_demo/` any time to reset both demos.
 
+## Spark benchmark and optimization
+
+Measured on October 11, 2026 against all **2,830,743 rows** (8 CSV files,
+884,645,759 input bytes), on an Apple M4 with 10 cores,
+24 GiB RAM, Spark 3.5.3 / Delta 3.2.1 / Java 17.0.20.1 / Python 3.13.11.
+Each configuration has three sequential fresh-JVM runs, rotating execution
+order, with fresh Delta output directories. Timing includes Spark creation,
+CSV schema inference, cleaning, the full fact write, exact benign p99,
+aggregate writes, explain-plan capture and Spark stop; Python import time
+is excluded. No other Spark jobs ran concurrently. OS page cache was not
+cleared; desktop activity and thermal/load variation are uncontrolled.
+
+| Configuration | Median seconds | Observed range (3 runs) |
+| --- | ---: | ---: |
+| Full fact cache (baseline) | 42.83 | 36.75–44.42 |
+| 7-column cache from Delta | 35.07 | 31.70–42.37 |
+| No cache, read Delta (default) | 33.31 | 32.33–37.45 |
+| 7-column cache, AQE off | 37.74 | 31.55–43.03 |
+| 7-column cache, 20 shuffle partitions | 38.34 | 35.03–44.85 |
+
+The default now writes the wide fact table once, then reads only aggregate
+columns from that Delta snapshot with Parquet column pruning and **no
+cache**. The before/after median is **42.83s → 33.31s
+(22.2% lower)**. The baseline cached all 83 cleaned
+columns; the narrow-cache alternative cached seven. Aggregate plans show
+`InMemoryTableScan` in the baseline and pruned Parquet reads in the default.
+This avoids materializing an 83-column cache for a fact table written once.
+
+The baseline already used AQE and 10 shuffle partitions. These are not new
+optimizations: the matrix tests AQE off and 20 partitions and retains AQE
+on plus 10 partitions because the no-cache configuration was fastest by
+median. The CSV scan uses 11 input partitions. Fact output remains
+partitioned by `event_date` and `attack_category`; label/anomaly aggregates
+use `event_date`. The source-IP table is absent on this mirror, so its
+window aggregation is covered by the CI fixture, not these timings.
+
+All 15 runs produce 2,830,743 cleaned rows. Full fact schemas, row counts
+and commutative xxhash64 sum/min/max fingerprints match; all aggregate
+rows and exact thresholds match across every configuration. The fingerprint
+is a scalable consistency check, not a mathematical proof of multiset
+equality. CI separately compares complete fixture rows with `exceptAll`
+in both directions between Delta and Iceberg. No threshold approximation
+or reduced-column fact table was used to obtain the speedup.
+
+Raw per-stage timings, input file sizes, configuration, output verification,
+and representative before/after plans are committed in
+[`benchmarks/results/2026-10-11/`](benchmarks/results/2026-10-11/).
+These are local historical-dataset measurements, not a cluster benchmark,
+a timing guarantee, or a Delta-versus-Iceberg performance comparison.
+
+Reproduce the matrix and equality check (the output directory must be new):
+
+```bash
+source scripts/env.sh
+python3 benchmarks/run.py --raw-dir data/raw \
+  --output /tmp/network-security-benchmark-new --repeats 3 --shuffle-partitions 10
+# Individual strategies remain available:
+python3 jobs/transform.py --cache-mode full --delta-dir /tmp/etl-full
+python3 jobs/transform.py --cache-mode narrow --delta-dir /tmp/etl-narrow
+python3 jobs/transform.py --cache-mode none --delta-dir /tmp/etl-none
+```
+
+`SPARK_MASTER`, `SPARK_DRIVER_MEMORY`, `SPARK_SHUFFLE_PARTITIONS`, and
+`SPARK_AQE_ENABLED` can override the local defaults. The shared Spark
+session uses UTC for consistent event windows across host and container.
+See [Spark's caching and AQE guidance](https://spark.apache.org/docs/3.5.7/sql-performance-tuning.html).
+
+## Failure recovery and alerts
+
+All seven DAG tasks get three retries, starting at one minute with
+exponential backoff and a ten-minute cap (Airflow adds jitter), a one-hour
+execution timeout, a 90-minute SLA, and a terminal-failure callback.
+The callback sends a DAG/task/run identifier and log link; it does not
+include exception payloads or credentials. Delivery errors are logged
+without exposing the webhook URL or replacing the original task error.
+
+Configure either or both destinations in your untracked `.env`:
+
+```dotenv
+PIPELINE_SLACK_WEBHOOK_URL=https://hooks.slack.com/services/REPLACE_WITH_SECRET
+PIPELINE_ALERT_EMAILS=you@example.com
+SMTP_HOST=smtp.example.com
+SMTP_PORT=587
+SMTP_USER=airflow
+SMTP_PASSWORD=REPLACE_WITH_SECRET
+SMTP_MAIL_FROM=airflow@example.com
+# Optional: scheduled refreshes of the fixed historical dataset
+PIPELINE_SCHEDULE=0 2 * * *
+```
+
+The default remains manual (`schedule=None`). **Airflow 2.9 does not check
+SLAs for manually triggered runs**, so the SLA callback requires scheduled
+runs and the scheduler's default `check_slas=true`. Manual runs still get
+execution timeouts, retries and failure alerts. See the
+[Airflow 2.9 SLA documentation](https://airflow.apache.org/docs/apache-airflow/2.9.3/core-concepts/tasks.html#slas).
+With no destinations configured, callbacks log a warning. Tests mock all
+outbound delivery; they never post to Slack or send email.
+
+## Continuous integration
+
+`.github/workflows/etl.yml` runs on every push and pull request. It builds
+`Dockerfile.airflow` (Airflow 2.9.3, Python 3.11, Java 17, Spark 3.5.3,
+Delta 3.2.1), then runs unit tests, a real failing-task callback test, a
+strict DAG import check, and `tests/fixture_etl.py` inside that image.
+The image pins Airflow and compatible pandas/numpy during dependency
+installation; otherwise a resolver can change the deployed Airflow version.
+
+The fixture uses public documentation IP ranges and needs no Kaggle,
+BigQuery, Slack or SMTP credentials. It exercises nonfinite rates, label
+cleaning, time windows, the exact benign p99, both table formats, repeat
+export without duplicates, optional-table cleanup, and both sets of
+schema evolution/time travel demos. Spark uses two cores and 2 GB for CI.
+This validates the ETL components; live BigQuery delivery still requires
+credentials and is covered locally by mocked-client tests.
+
+Run the same checks locally:
+
+```bash
+docker build -f Dockerfile.airflow -t network-security-airflow:ci .
+docker run --rm --entrypoint bash -v "$PWD:/workspace:ro" -w /workspace \
+  -e AIRFLOW_HOME=/tmp/airflow-ci -e AIRFLOW__CORE__LOAD_EXAMPLES=false \
+  -e AIRFLOW__CORE__UNIT_TEST_MODE=true -e PROJECT_ROOT=/workspace \
+  -e SPARK_MASTER='local[2]' -e SPARK_SHUFFLE_PARTITIONS=2 \
+  -e SPARK_DRIVER_MEMORY=2g -e SPARK_LOCAL_IP=127.0.0.1 \
+  network-security-airflow:ci -euc '
+    airflow db migrate
+    python -m unittest discover -s tests -v
+    python scripts/check_dag_imports.py
+    python tests/fixture_etl.py
+  '
+```
+
+## Apache Iceberg: export, schema evolution and time travel
+
+`jobs/write_iceberg.py` reads pinned, validated Delta versions and writes
+`iceberg.security.network_events`, `label_counts`, and the optional
+`src_ip_window_counts` and `anomaly_threshold_counts`. It uses the Spark
+3.5 / Scala 2.12 Iceberg 1.10.0 runtime and a separate Hadoop catalog at
+`data/iceberg`. Delta's catalog remains `spark_catalog`; Iceberg's catalog
+is named `iceberg`. The runtime JAR is resolved from Maven on first use.
+
+```bash
+source scripts/env.sh
+python3 jobs/write_iceberg.py
+python3 iceberg_demos/schema_evolution.py
+python3 iceberg_demos/time_travel.py
+```
+
+Each export replaces a table rather than appending, checks row counts,
+and records Delta versions and Iceberg snapshot IDs. Missing optional
+inputs remove stale catalog tables. Replacement is atomic per table;
+there is no cross-table transaction. The export manifest is removed
+before writes and published only after all tables succeed. Readers that
+need a consistent exported set can use its recorded snapshot IDs.
+A later run invalidates the previous marker until it finishes.
+
+The demos copy the fact table to `iceberg.demo.network_events`, add a
+nullable `threat_intel_score` with `ALTER TABLE ADD COLUMN`, and append
+three rows. They assert that existing rows get null scores and explicitly
+read the original snapshot to recover its original schema and row count.
+They leave `iceberg.security` unchanged. Re-running schema evolution
+resets only the demo table. Delete `data/iceberg/` to reset the local catalog.
+
+| Detail | Delta Lake in this project | Iceberg in this project |
+| --- | --- | --- |
+| Table lookup | Filesystem path and Delta catalog | Named Hadoop catalog + namespace |
+| History | Sequential transaction-log versions | Snapshot IDs and metadata files |
+| Evolution demo | Append with `mergeSchema=true` | Explicit nullable `ADD COLUMN`, then append |
+| Time travel | `versionAsOf` | `snapshot-id` with historical schema |
+| Partitioning here | Explicit date/category columns | Same identity partitions; hidden transforms are available |
+| Downstream use | Validation, BigQuery, retention and publish gate | Independent snapshot export for Spark readers |
+
+Full-data verification also passed: the export contains **2,830,743 fact
+rows**, 19 label aggregates and 12 anomaly aggregates. The isolated demo
+contains 2,830,746 rows after its three-row append, and snapshot time travel
+restores the original 2,830,743 rows and schema. The source is the
+independently validated median no-cache benchmark output; snapshot IDs and
+row counts are recorded in
+[`iceberg-verification.json`](benchmarks/results/2026-10-11/iceberg-verification.json).
+
+Both formats provide snapshot reads and schema evolution. This project
+compares their APIs and correctness, not cross-engine performance.
+The local Hadoop catalog is suitable for this single-writer demo; an
+object-store deployment should use a catalog with appropriate commit
+coordination. References: [Iceberg configuration](https://iceberg.apache.org/docs/1.10.0/spark-configuration/),
+[writes](https://iceberg.apache.org/docs/1.10.0/spark-writes/), and
+[historical schema selection](https://iceberg.apache.org/docs/1.10.0/spark-queries/#schema-selection-in-time-travel-queries).
+
 ## Orchestration (Airflow)
 
 A dedicated single-container Airflow (`apache/airflow:2.9.3-python3.11` +
@@ -147,7 +339,7 @@ Java 17 + PySpark + Delta, via `Dockerfile.airflow`) runs the DAG in
 `dags/network_security_pipeline_dag.py`:
 
 ```
-ingest_raw -> spark_transform -> validate_output -> load_bigquery -> retain_delta -> write_delta_table
+ingest_raw -> spark_transform -> validate_output -> write_iceberg -> load_bigquery -> retain_delta -> write_delta_table
 ```
 
 - **ingest_raw**: `scripts/download_dataset.sh` (idempotent).
@@ -155,6 +347,9 @@ ingest_raw -> spark_transform -> validate_output -> load_bigquery -> retain_delt
 - **validate_output**: `python3 validation/validate_output.py` -- fails
   the task (and halts the DAG) if the cross-check doesn't pass. This is
   the gate that decides whether a run is trustworthy enough to publish.
+- **write_iceberg**: `python3 jobs/write_iceberg.py` -- writes the validated
+  Delta snapshots to Iceberg and records source versions, snapshot IDs and
+  row counts in `data/iceberg/_manifest.json`.
 - **load_bigquery**: `python3 jobs/load_bigquery.py` -- batch-loads the validated
   fact table and available aggregates to BigQuery; fails on upload or row-count errors.
 - **write_delta_table**: `dags/publish_manifest.py`, which only runs after
@@ -306,8 +501,8 @@ the fixture.
   This dataset (~885MB, 2.83M rows) is genuinely large enough to justify
   Spark over pandas -- and large enough that it needed real memory/codec
   tuning to run reliably (see "Real-data findings" above) -- but Spark
-  still held the whole cleaned dataset in a single machine's memory via
-  `.cache()`. It does not stress-test genuine out-of-core / multi-node
+  is processed on one machine; the optimized path no longer caches the
+  wide fact table. It does not stress-test genuine out-of-core / multi-node
   behavior (shuffle over the network, executor failure/recovery, data
   skew across real partitions) the way a real multi-GB/TB production
   workload on an actual cluster would.
@@ -316,7 +511,7 @@ the fixture.
 ## BigQuery sandbox destination
 
 The DAG now requires BigQuery configuration and follows:
-`ingest_raw -> spark_transform -> validate_output -> load_bigquery -> retain_delta -> write_delta_table`.
+`ingest_raw -> spark_transform -> validate_output -> write_iceberg -> load_bigquery -> retain_delta -> write_delta_table`.
 The earlier end-to-end Airflow results above predate this addition. The new loader
 has local fixture tests with a mocked BigQuery client; a live cloud load still
 requires your project and credentials.
